@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-dark-bg text-dark-text font-sans;
+  }
+  
+  * {
+    @apply border-dark-border;
+  }
+}
+
+@layer components {
+  .neon-border {
+    @apply border border-neon-green shadow-lg shadow-neon-green/20;
+  }
+  
+  .neon-text {
+    @apply text-neon-green;
+  }
+  
+  .damage-text {
+    @apply text-neon-red font-bold text-xl;
+  }
+  
+  .card-dark {
+    @apply bg-dark-card border border-dark-border rounded-lg;
+  }
+  
+  .btn-primary {
+    @apply bg-neon-green text-dark-bg hover:bg-neon-green/90 font-semibold py-2 px-4 rounded transition-all duration-200 hover:scale-105;
+  }
+  
+  .btn-secondary {
+    @apply bg-dark-card border border-dark-border hover:bg-dark-border font-semibold py-2 px-4 rounded transition-all duration-200;
+  }
+  
+  .btn-danger {
+    @apply bg-neon-red text-white hover:bg-neon-red/90 font-semibold py-2 px-4 rounded transition-all duration-200;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-dark-bg;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-dark-border rounded;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-neon-green/50;
+}
+
+/* Monaco Editor theme override */
+.monaco-editor {
+  @apply bg-dark-bg;
+}
+
+.monaco-editor .margin {
+  @apply bg-dark-card;
+}
+
+.monaco-editor .monaco-editor-background,
+.monaco-editor .inputarea.ime-input {
+  @apply bg-dark-bg;
+}

@@ -1,0 +1,29 @@
+{
+  "name": "code-clash-mvp",
+  "version": "1.0.0",
+  "description": "Code-Clash Arena of Algorithms - Hackathon MVP",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server", 
+    "shared"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "npm run build:shared && npm run build:client && npm run build:server",
+    "build:server": "cd server && npm run build",
+    "build:client": "cd client && npm run build", 
+    "build:shared": "cd shared && npm run build",
+    "start": "cd server && npm start",
+    "install:all": "npm install && npm run install:server && npm run install:client && npm run install:shared",
+    "install:server": "cd server && npm install",
+    "install:client": "cd client && npm install",
+    "install:shared": "cd shared && npm install",
+    "setup": "npm run install:all && echo 'Setup complete! Run npm run dev to start'"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

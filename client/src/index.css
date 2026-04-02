@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-900 text-white;
+  }
+}
+
+@layer components {
+  .hp-bar {
+    @apply transition-all duration-500 ease-out;
+  }
+  
+  .damage-toast {
+    animation: floatUp 2s ease-out forwards;
+  }
+  
+  .neon-text {
+    text-shadow: 0 0 10px currentColor;
+  }
+  
+  .neon-border {
+    box-shadow: 0 0 20px currentColor;
+  }
+}

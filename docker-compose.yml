@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: codeclash
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./apps/api/prisma/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  judge0:
+    image: judge0/judge0:latest
+    ports:
+      - "2358:2358"
+    privileged: true
+    volumes:
+      - /tmp/judge0:/tmp/judge0
+    environment:
+      - JUDGE0_MAINTENANCE_MODE=false
+      - JUDGE0_E2E_TIMEOUT=20
+      - JUDGE0_COMPILE_TIMEOUT=10
+      - JUDGE0_RUN_TIMEOUT=5
+      - JUDGE0_CPULIMIT_TIMEOUT=3
+      - JUDGE0_MEMORY_LIMIT=256
+      - JUDGE0_CPU_LIMIT=2
+      - JUDGE0_MAX_CONCURRENT_RUNS=10
+    restart: unless-stopped
+
+  api:
+    build: ./apps/api
+    depends_on:
+      - postgres
+      - redis
+      - judge0
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/codeclash
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your-jwt-secret-key-here
+      NODE_ENV: development
+      JUDGE0_URL: http://judge0:2358
+    volumes:
+      - ./apps/api:/app
+      - /app/node_modules
+
+  judge:
+    build: ./services/judge
+    depends_on:
+      - postgres
+      - redis
+      - judge0
+    ports:
+      - "3002:3002"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/codeclash
+      REDIS_URL: redis://redis:6379
+      JUDGE0_URL: http://judge0:2358
+      JUDGE0_API_URL: http://judge0:2358
+      NODE_ENV: development
+      CORS_ORIGIN: http://localhost:3001
+    volumes:
+      - ./services/judge:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  web:
+    build: ./apps/web
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:3001
+      REACT_APP_SOCKET_URL: http://localhost:3001
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data:
+  redis_data:

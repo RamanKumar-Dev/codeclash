@@ -1,0 +1,19 @@
+{
+  "name": "code-clash",
+  "version": "1.0.0",
+  "description": "Real-time 1v1 competitive coding game",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "docker-compose up",
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
