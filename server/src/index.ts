@@ -18,16 +18,15 @@ dotenv.config();
 const app = express();
 const server = createServer(app);
 
+// Allow any localhost origin (handles Vite auto-assigning ports like 5174)
+const isAllowedOrigin = (origin: string | undefined) =>
+  !origin ||
+  /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+  origin === (process.env.CLIENT_URL || 'http://localhost:3000');
+
 // Middleware
 app.use(cors({
-  origin: [
-    process.env.CLIENT_URL || 'http://localhost:3000',
-    'http://localhost:3002',
-    'http://localhost:3003',
-    'http://localhost:3004',
-    'http://localhost:5173',
-    'http://localhost:4173',
-  ],
+  origin: (origin, cb) => cb(null, isAllowedOrigin(origin) ? origin : false),
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
 }));
@@ -42,14 +41,7 @@ const redis: RedisClientType = createClient({
 // Socket.io setup
 const io = new Server(server, {
   cors: {
-    origin: [
-      process.env.CLIENT_URL || 'http://localhost:3000',
-      'http://localhost:3002',
-      'http://localhost:3003',
-      'http://localhost:3004',
-      'http://localhost:5173',
-      'http://localhost:4173',
-    ],
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin) ? origin : false),
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -168,8 +160,30 @@ io.on('connection', (socket) => {
       (socket as any).username = payload.username;
       (socket as any).elo = payload.elo || 1000;
 
-      // Register socket
+      // Check for session conflict before registering
+      const existingSocketId = await redis.get(`session:${payload.userId}`);
+      if (existingSocketId && existingSocketId !== socket.id) {
+        socket.emit('session:conflict', {
+          message: 'You have another active session. The previous session will be disconnected.',
+          existingSocketId
+        });
+        
+        // Disconnect the old socket
+        const oldSocket = socketRegistry.get(payload.userId);
+        if (oldSocket && oldSocket.id === existingSocketId) {
+          oldSocket.emit('session:displaced', {
+            message: 'You have been disconnected due to login from another tab.'
+          });
+          oldSocket.disconnect();
+        }
+        
+        // Clear old session
+        await redis.del(`session:${payload.userId}`);
+      }
+
+      // Register socket and session
       socketRegistry.set(payload.userId, socket);
+      await redis.setEx(`session:${payload.userId}`, 3600, socket.id); // 1 hour TTL
 
       console.log(`[Auth] ${payload.username} authenticated (ELO: ${(socket as any).elo})`);
       socket.emit('authenticated', { userId: payload.userId, username: payload.username });
@@ -185,6 +199,22 @@ io.on('connection', (socket) => {
       socket.emit('queue:error', 'Authenticate first');
       return;
     }
+
+    // Check for session conflict (multiple tabs)
+    const existingSocketId = await redis.get(`session:${userId}`);
+    if (existingSocketId && existingSocketId !== socket.id) {
+      socket.emit('session:conflict', {
+        message: 'You have another active session. Please close other tabs first.',
+        existingSocketId
+      });
+      
+      // Disconnect the new socket to prevent conflicts
+      socket.disconnect();
+      return;
+    }
+
+    // Register this socket as the active session
+    await redis.setEx(`session:${userId}`, 3600, socket.id); // 1 hour TTL
 
     const elo = (socket as any).elo || data?.elo || 1000;
     await matchmakingService.addToQueue(userId, elo);
@@ -278,13 +308,73 @@ io.on('connection', (socket) => {
   });
 
   // ── Disconnect ──────────────────────────────────────────────────────────────
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     const userId = (socket as any).userId;
     if (userId) {
       socketRegistry.delete(userId);
+      
+      // Clear session if this was the active socket
+      const activeSocketId = await redis.get(`session:${userId}`);
+      if (activeSocketId === socket.id) {
+        await redis.del(`session:${userId}`);
+      }
+      
+      // Check if user was in an active battle and start grace timer
+      const userBattles = await redis.keys('battle:*');
+      for (const battleKey of userBattles) {
+        const battleState = await redis.get(battleKey);
+        if (battleState) {
+          const battle = JSON.parse(battleState);
+          if ((battle.player1Id === userId || battle.player2Id === userId) && 
+              battle.status === 'ACTIVE') {
+            // Start 30-second grace timer for reconnection
+            await redis.setEx(`grace:${userId}`, 30, JSON.stringify({
+              battleId: battleKey.replace('battle:', ''),
+              disconnectedAt: Date.now(),
+              wasPlayer1: battle.player1Id === userId
+            }));
+            console.log(`[Grace] Started 30s timer for disconnected user: ${userId}`);
+            break;
+          }
+        }
+      }
+      
       matchmakingService.removeFromQueue(userId);
     }
     console.log(`[Socket] Disconnected: ${socket.id}`);
+  });
+
+  // ── Reconnection Check ───────────────────────────────────────────────────────
+  socket.on('check:reconnection', async (data: { userId: string }) => {
+    const { userId } = data;
+    const graceData = await redis.get(`grace:${userId}`);
+    
+    if (graceData) {
+      const grace = JSON.parse(graceData);
+      const timeSinceDisconnect = Date.now() - grace.disconnectedAt;
+      
+      if (timeSinceDisconnect < 30000) { // Within 30 seconds
+        // Restore user session
+        (socket as any).userId = userId;
+        socketRegistry.set(userId, socket);
+        
+        // Clear grace timer
+        await redis.del(`grace:${userId}`);
+        
+        socket.emit('reconnection:success', {
+          battleId: grace.battleId,
+          wasPlayer1: grace.wasPlayer1
+        });
+        
+        console.log(`[Reconnection] User ${userId} reconnected successfully`);
+      } else {
+        // Grace period expired - forfeit the battle
+        await handleGraceTimeout(userId, grace.battleId);
+        socket.emit('reconnection:failed', { reason: 'grace_period_expired' });
+      }
+    } else {
+      socket.emit('reconnection:failed', { reason: 'no_grace_period' });
+    }
   });
 });
 
@@ -297,6 +387,35 @@ function getEloTier(elo: number): string {
   return 'Bronze';
 }
 
+// ─── Grace Timeout Handler ─────────────────────────────────────────────────────
+async function handleGraceTimeout(userId: string, battleId: string) {
+  try {
+    const battleState = await redis.get(`battle:${battleId}`);
+    if (battleState) {
+      const battle = JSON.parse(battleState);
+      if (battle.status === 'ACTIVE') {
+        // Forfeit the battle for the disconnected player
+        if (battle.player1Id === userId) {
+          battle.hp1 = 0;
+        } else {
+          battle.hp2 = 0;
+        }
+        
+        // Use battle service to end the battle properly
+        const winnerId = battle.player1Id === userId ? battle.player2Id : battle.player1Id;
+        await battleService.endBattle(battleId, battle, winnerId);
+        
+        console.log(`[Grace] Auto-forfeited battle ${battleId} for disconnected user ${userId}`);
+      }
+    }
+    
+    // Clean up grace timer
+    await redis.del(`grace:${userId}`);
+  } catch (error) {
+    console.error('[Grace] Error handling timeout:', error);
+  }
+}
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 
@@ -304,6 +423,12 @@ async function startServer() {
   try {
     await redis.connect();
     console.log('✅ Connected to Redis');
+    
+    // Check for orphaned grace timers on startup
+    await cleanupOrphanedGraceTimers();
+    
+    // Check for orphaned battles from server crash
+    await battleService.checkOrphanedBattles();
 
     server.listen(PORT, () => {
       console.log(`🚀 CodeClash server running on port ${PORT}`);
@@ -312,6 +437,30 @@ async function startServer() {
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);
+  }
+}
+
+// ─── Cleanup Orphaned Grace Timers ─────────────────────────────────────────────
+async function cleanupOrphanedGraceTimers() {
+  try {
+    const graceKeys = await redis.keys('grace:*');
+    const now = Date.now();
+    
+    for (const key of graceKeys) {
+      const graceData = await redis.get(key);
+      if (graceData) {
+        const grace = JSON.parse(graceData);
+        const timeSinceDisconnect = now - grace.disconnectedAt;
+        
+        if (timeSinceDisconnect >= 30000) {
+          await handleGraceTimeout(key.replace('grace:', ''), grace.battleId);
+        }
+      }
+    }
+    
+    console.log(`[Cleanup] Processed ${graceKeys.length} grace timers`);
+  } catch (error) {
+    console.error('[Cleanup] Error:', error);
   }
 }
 

@@ -14,6 +14,8 @@ model User {
   email             String   @unique
   passwordHash      String   @map("password_hash")
   elo               Int      @default(1000)
+  seasonalElo       Int      @default(1000) @map("seasonal_elo")
+  rankTier          String   @default("Bronze") @map("rank_tier")
   wins              Int      @default(0)
   losses            Int      @default(0)
   winStreak         Int      @default(0) @map("win_streak")
@@ -21,6 +23,10 @@ model User {
   hp                Int      @default(500)
   maxHp             Int      @default(500) @map("max_hp")
   avatar            String?
+  lastActiveAt      DateTime @default(now()) @map("last_active_at")
+  lastBattleAt      DateTime? @map("last_battle_at")
+  battlesToday      Int      @default(0) @map("battles_today")
+  dailyBattleReset  DateTime @default(now()) @map("daily_battle_reset")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
@@ -32,6 +38,8 @@ model User {
   battleSpells      BattleSpell[]
   battleDamage      BattleDamage[]
   achievements      UserAchievement[]
+  eloHistory        EloHistory[]
+  seasonBadges      SeasonBadge[]
 
   @@map("users")
 }
@@ -145,4 +153,51 @@ model UserAchievement {
 
   @@unique([userId, achievementId])
   @@map("user_achievements")
+}
+
+model Season {
+  id          String   @id @default(cuid())
+  name        String
+  startDate   DateTime @map("start_date")
+  endDate     DateTime @map("end_date")
+  isActive    Boolean  @default(false) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  eloHistory   EloHistory[]
+  seasonBadges SeasonBadge[]
+
+  @@map("seasons")
+}
+
+model EloHistory {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  seasonId  String   @map("season_id")
+  elo       Int
+  battleId  String?  @map("battle_id")
+  timestamp DateTime @default(now())
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id])
+  season Season @relation(fields: [seasonId], references: [id])
+
+  @@map("elo_history")
+}
+
+model SeasonBadge {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  seasonId   String   @map("season_id")
+  rank       Int
+  badgeType  String   @map("badge_type") // 'gold', 'silver', 'bronze'
+  awardedAt  DateTime @default(now()) @map("awarded_at")
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id])
+  season Season @relation(fields: [seasonId], references: [id])
+
+  @@unique([userId, seasonId])
+  @@map("season_badges")
 }

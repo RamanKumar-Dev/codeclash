@@ -16,6 +16,7 @@ interface BattleState {
   sub2Count: number;
   matchId?: string;
   timeLimitSeconds?: number;
+  lastHeartbeat?: number; // Add heartbeat for crash recovery
 }
 
 const INITIAL_HP = 500;
@@ -37,6 +38,59 @@ export class BattleService {
     return this.getBattleState(roomId);
   }
 
+  /** Check for orphaned battles on server startup */
+  async checkOrphanedBattles(): Promise<void> {
+    try {
+      const battleKeys = await this.redis.keys('battle:*');
+      const now = Date.now();
+      const heartbeatTimeout = 2 * 60 * 1000; // 2 minutes
+      
+      for (const key of battleKeys) {
+        const battleState = await this.redis.get(key);
+        if (battleState) {
+          const battle = JSON.parse(battleState) as BattleState;
+          
+          // Check if battle is active and heartbeat is expired
+          if (battle.status === 'ACTIVE' && 
+              battle.lastHeartbeat && 
+              (now - battle.lastHeartbeat) > heartbeatTimeout) {
+            
+            console.log(`[Recovery] Found orphaned battle: ${key.replace('battle:', '')}`);
+            
+            // Auto-forfeit the battle - both players lose due to server crash
+            battle.hp1 = 0;
+            battle.hp2 = 0;
+            battle.status = 'ENDED';
+            
+            await this.saveBattleState(key.replace('battle:', ''), battle);
+            
+            // Notify both players if they're online
+            const socket1 = this.socketRegistry.get(battle.player1Id);
+            const socket2 = this.socketRegistry.get(battle.player2Id);
+            
+            const notification = {
+              reason: 'server_crash',
+              message: 'Battle ended due to server restart'
+            };
+            
+            if (socket1) {
+              socket1.emit('battle:crash_recovery', notification);
+            }
+            if (socket2) {
+              socket2.emit('battle:crash_recovery', notification);
+            }
+            
+            console.log(`[Recovery] Auto-forfeited orphaned battle: ${key.replace('battle:', '')}`);
+          }
+        }
+      }
+      
+      console.log(`[Recovery] Checked ${battleKeys.length} battles for orphaned states`);
+    } catch (error) {
+      console.error('[Recovery] Error checking orphaned battles:', error);
+    }
+  }
+
   /** Get test cases for a battle's problem (used for hint spells) */
   async getPuzzleTestCases(roomId: string): Promise<Array<{ input: string; expectedOutput: string }>> {
     const state = await this.getBattleState(roomId);
@@ -47,25 +101,46 @@ export class BattleService {
         where: { id: state.problemId },
         select: { testCases: true },
       });
-      const tcs = problem?.testCases as any[] || [];
+      const tcs = (problem?.testCases as unknown as any[]) || [];
       return tcs.map((tc: any) => ({ input: tc.input, expectedOutput: tc.expectedOutput }));
     } catch {
       return [];
     }
   }
 
-  /** Handle code submission */
+  /** Handle code submission with distributed lock */
   async handleSubmit(
     socket: Socket,
     data: { code: string; languageId: number; roomId: string; userId: string }
   ): Promise<void> {
     const { code, languageId, roomId, userId } = data;
+    const lockKey = `submission:lock:${userId}`;
+    const lockTimeout = 10; // 10 seconds lock timeout
 
     try {
+      // Acquire distributed lock to prevent simultaneous submissions
+      const lockAcquired = await this.acquireDistributedLock(lockKey, lockTimeout);
+      if (!lockAcquired) {
+        socket.emit('submit:error', 'Please wait for your previous submission to complete');
+        return;
+      }
+
       const battleState = await this.getBattleState(roomId);
-      if (!battleState) { socket.emit('submit:error', 'Battle not found'); return; }
-      if (!this.isPlayerInBattle(userId, battleState)) { socket.emit('submit:error', 'Not in this battle'); return; }
-      if (battleState.status !== 'ACTIVE') { socket.emit('submit:error', 'Battle not active'); return; }
+      if (!battleState) { 
+        await this.releaseDistributedLock(lockKey);
+        socket.emit('submit:error', 'Battle not found'); 
+        return; 
+      }
+      if (!this.isPlayerInBattle(userId, battleState)) { 
+        await this.releaseDistributedLock(lockKey);
+        socket.emit('submit:error', 'Not in this battle'); 
+        return; 
+      }
+      if (battleState.status !== 'ACTIVE') { 
+        await this.releaseDistributedLock(lockKey);
+        socket.emit('submit:error', 'Battle not active'); 
+        return; 
+      }
 
       const isPlayer1 = battleState.player1Id === userId;
 
@@ -90,6 +165,7 @@ export class BattleService {
         socket.emit('submit:error', 'Problem data not found');
         battleState.status = 'ACTIVE';
         await this.saveBattleState(roomId, battleState);
+        await this.releaseDistributedLock(lockKey);
         return;
       }
 
@@ -182,6 +258,9 @@ export class BattleService {
         s.status = 'ACTIVE';
         await this.saveBattleState(roomId, s);
       }
+    } finally {
+      // Always release the lock
+      await this.releaseDistributedLock(lockKey);
     }
   }
 
@@ -358,6 +437,8 @@ export class BattleService {
   }
 
   private async saveBattleState(roomId: string, state: BattleState): Promise<void> {
+    // Update heartbeat on every save
+    state.lastHeartbeat = Date.now();
     await this.redis.setEx(`battle:${roomId}`, 7200, JSON.stringify(state));
   }
 
@@ -373,7 +454,7 @@ export class BattleService {
       });
       if (!problem) return { problem: null, testCases: [] };
 
-      const testCases = (problem.testCases as any[]).map((tc: any) => ({
+      const testCases = (problem.testCases as unknown as any[]).map((tc: any) => ({
         input: tc.input,
         expectedOutput: tc.expectedOutput,
         isHidden: tc.isHidden || false,
@@ -408,5 +489,52 @@ export class BattleService {
       74: 'typescript', 68: 'php', 72: 'ruby', 60: 'go',
     };
     return map[id] || 'unknown';
+  }
+
+  /** Redis Distributed Lock Implementation */
+  private async acquireDistributedLock(lockKey: string, timeoutSeconds: number): Promise<boolean> {
+    try {
+      const lockValue = `${Date.now()}-${Math.random()}`;
+      const result = await this.redis.set(
+        lockKey, 
+        lockValue, 
+        {
+          NX: true, // Only set if key doesn't exist
+          EX: timeoutSeconds // Auto-expire after timeout
+        }
+      );
+      
+      if (result === 'OK') {
+        // Store lock value for later release
+        await this.redis.setEx(`${lockKey}:value`, timeoutSeconds, lockValue);
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('[Lock] Error acquiring lock:', error);
+      return false;
+    }
+  }
+
+  private async releaseDistributedLock(lockKey: string): Promise<void> {
+    try {
+      const lockValue = await this.redis.get(`${lockKey}:value`);
+      if (!lockValue) return;
+      
+      // Use Lua script for atomic lock release
+      const luaScript = `
+        if redis.call("get", "${lockKey}:value") == "${lockValue}" then
+          return redis.call("del", "${lockKey}")
+        else
+          return 0
+        end
+      `;
+      
+      await this.redis.eval(luaScript);
+      await this.redis.del(`${lockKey}:value`);
+    } catch (error) {
+      console.error('[Lock] Error releasing lock:', error);
+    }
   }
 }

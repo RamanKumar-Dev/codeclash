@@ -248,32 +248,69 @@ export class MatchmakingService {
 
     const timeLimitSec = Math.floor(problem.timeLimitMs / 1000);
 
-    // 60s warning
-    if (timeLimitSec > 60) {
-      setTimeout(() => {
-        this.io.to(roomId).emit('battle:time_warning', { secondsLeft: 60 });
-      }, (timeLimitSec - 60) * 1000);
-    }
+    // Start server-owned timer with periodic resync
+    this.startBattleTimer(roomId, timeLimitSec, problem.timeLimitMs);
+  }
 
-    // Battle timeout
-    setTimeout(async () => {
-      const currentState = await this.getBattleState(roomId);
-      if (currentState && currentState.status === 'ACTIVE') {
-        // Time's up — winner is whoever has more HP
-        currentState.status = 'ENDED';
-        await this.redis.setEx(`battle:${roomId}`, 7200, JSON.stringify(currentState));
-
-        const winnerId = currentState.hp1 >= currentState.hp2
-          ? currentState.player1Id
-          : currentState.player2Id;
-
-        this.io.to(roomId).emit('battle:timeout', {
-          winnerId,
-          hp1: currentState.hp1,
-          hp2: currentState.hp2,
+  /** Server-owned battle timer with periodic resync */
+  private startBattleTimer(roomId: string, timeLimitSec: number, timeLimitMs: number): void {
+    let elapsedSeconds = 0;
+    const tickInterval = 10000; // 10 seconds
+    
+    const timerInterval = setInterval(async () => {
+      elapsedSeconds += tickInterval / 1000;
+      
+      try {
+        const battleState = await this.getBattleState(roomId);
+        if (!battleState || battleState.status !== 'ACTIVE') {
+          clearInterval(timerInterval);
+          return;
+        }
+        
+        const remainingSeconds = Math.max(0, timeLimitSec - elapsedSeconds);
+        
+        // Emit timer tick to all clients for resync
+        this.io.to(roomId).emit('battle:tick', {
+          elapsedSeconds,
+          remainingSeconds,
+          totalSeconds: timeLimitSec,
+          timestamp: Date.now()
         });
+        
+        // 60s warning
+        if (remainingSeconds === 60) {
+          this.io.to(roomId).emit('battle:time_warning', { secondsLeft: 60 });
+        }
+        
+        // Battle timeout
+        if (remainingSeconds <= 0) {
+          clearInterval(timerInterval);
+          
+          battleState.status = 'ENDED';
+          await this.redis.setEx(`battle:${roomId}`, 7200, JSON.stringify(battleState));
+
+          const winnerId = battleState.hp1 >= battleState.hp2
+            ? battleState.player1Id
+            : battleState.player2Id;
+
+          this.io.to(roomId).emit('battle:timeout', {
+            winnerId,
+            hp1: battleState.hp1,
+            hp2: battleState.hp2,
+          });
+        }
+      } catch (error) {
+        console.error('[Timer] Error in battle timer:', error);
+        clearInterval(timerInterval);
       }
-    }, timeLimitSec * 1000);
+    }, tickInterval);
+    
+    // Store timer reference for cleanup
+    this.redis.setEx(`timer:${roomId}`, timeLimitSec + 60, JSON.stringify({
+      intervalId: timerInterval.toString(),
+      startTime: Date.now(),
+      timeLimitSec
+    }));
   }
 
   /** Select problem based on average ELO */
