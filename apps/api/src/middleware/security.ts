@@ -177,14 +177,7 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
 // Role-based access control
 export function requireRole(roles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!req.user) {
-      return res.status(401).json({
-        error: 'Authentication required',
-        message: 'User not authenticated',
-      });
-    }
-
-    if (!roles.includes(req.user.role)) {
+    if (!req.user || !('role' in req.user) || !roles.includes((req.user as any).role)) {
       return res.status(403).json({
         error: 'Insufficient permissions',
         message: 'Required role not found',

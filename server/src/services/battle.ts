@@ -1,14 +1,70 @@
 import { Server, Socket } from 'socket.io';
 import { createClient, RedisClientType } from 'redis';
 import axios from 'axios';
-import { 
-  BattleState, 
-  BattleSubmitEvent, 
-  BattleForfeitEvent,
-  BattleDamageEvent,
-  BattleEndEvent,
-  Puzzle
-} from '@code-clash/shared-types/mvp-types';
+
+// Local interfaces for MVP compatibility
+interface BattleState {
+  id: string;
+  player1Id: string;
+  player2Id: string;
+  problemId: string;
+  status: 'waiting' | 'active' | 'completed';
+  winnerId?: string;
+  currentRound: number;
+  player1Hp: number;
+  player2Hp: number;
+  startedAt?: Date;
+  endedAt?: Date;
+  startTimestamp?: number;
+  hp1?: number;
+  hp2?: number;
+  sub1Count?: number;
+  sub2Count?: number;
+}
+
+interface BattleSubmitEvent {
+  matchId: string;
+  userId: string;
+  code: string;
+  language: string;
+  languageId?: number;
+  roomId?: string;
+}
+
+interface BattleForfeitEvent {
+  matchId: string;
+  userId: string;
+  roomId?: string;
+}
+
+interface BattleDamageEvent {
+  matchId: string;
+  attackerId: string;
+  targetId: string;
+  damage: number;
+  damageType: 'puzzle' | 'spell';
+}
+
+interface BattleEndEvent {
+  matchId: string;
+  winnerId: string;
+  loserId: string;
+  reason: 'victory' | 'forfeit' | 'timeout';
+}
+
+interface Puzzle {
+  id: string;
+  title: string;
+  description: string;
+  difficulty: string;
+  timeLimitMs: number;
+  timeLimitSeconds?: number;
+  memoryLimitMb: number;
+  tags: string[];
+  examples?: Array<{ input: string; output: string }>;
+  testCases?: Array<{ input: string; expectedOutput: string; isHidden: boolean }>;
+  p50RuntimeMs?: number;
+}
 import { UserService } from './userService';
 import { ProblemService } from './problemService';
 

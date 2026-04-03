@@ -26,6 +26,7 @@ export interface LanguageConfig {
   run: string;
 }
 
+// Enhanced language configs from Lootcode
 export const LANGUAGE_CONFIGS: Record<string, LanguageConfig> = {
   python: { ext: "py", run: `python3 solution.py` },
   java: {
@@ -67,6 +68,8 @@ export class CodeExecutionService {
     code: string,
     language: string,
     testCases: { input: string; expected: string }[],
+    puzzleName?: string,
+    userId?: string,
     timeout?: number
   ): Promise<CodeExecutionResult> {
     $.verbose = false;
@@ -87,8 +90,10 @@ export class CodeExecutionService {
     await $`mkdir -p ${workDir}`;
 
     try {
-      // Handle Java class name
-      let processedCode = code;
+      // Handle special cases based on puzzle name (from Lootcode)
+      let processedCode = this.preprocessCode(code, puzzleName);
+      
+      // Handle Java class name (from Lootcode)
       if (langConfig.ext === "java") {
         const regex = /public\s+class\s+_?\w+/;
         if (processedCode.search(regex) === -1) {
@@ -102,6 +107,9 @@ export class CodeExecutionService {
 
       // Write code to file
       await writeFile(`${codePath}.${langConfig.ext}`, processedCode);
+
+      // Create Docker container (from Lootcode)
+      await $`docker run --network none --name ${executionId} --rm -i -d -v ${workDir}:/app/ code-runner`;
 
       // Compile if necessary
       if (langConfig.compile) {
@@ -196,6 +204,35 @@ export class CodeExecutionService {
     }
   }
 
+  private static preprocessCode(code: string, puzzleName?: string): string {
+    if (!puzzleName) return code;
+
+    let processedCode = code;
+
+    // Special case handling from Lootcode
+    switch (puzzleName) {
+      case "merger":
+        processedCode = processedCode.replaceAll(/[+\-*/]/g, "");
+        break;
+      case "gargantuan":
+        processedCode = processedCode.replaceAll(
+          /set_int_max_str_digits|BigInteger/g,
+          ""
+        );
+        break;
+      // Add more special cases as needed
+    }
+
+    return processedCode;
+  }
+
+  private static getTimeoutForPuzzle(puzzleName?: string, defaultTimeout?: number): number {
+    if (puzzleName === "the_pebble") {
+      return 5; // Special timeout for this puzzle
+    }
+    return defaultTimeout ?? this.DEFAULT_TIMEOUT;
+  }
+
   static async createExecutionContainer(): Promise<string> {
     $.verbose = false;
     
@@ -224,5 +261,45 @@ export class CodeExecutionService {
       );
     }
     return data;
+  }
+
+  // Enhanced language support
+  static getSupportedLanguages(): string[] {
+    return Object.keys(LANGUAGE_CONFIGS);
+  }
+
+  static getLanguageConfig(language: string): LanguageConfig | undefined {
+    return LANGUAGE_CONFIGS[language];
+  }
+
+  // Special puzzle configurations
+  static getPuzzleConfig(puzzleName: string): {
+    timeout: number;
+    preprocessCode: boolean;
+    specialRules: string[];
+  } {
+    const configs: Record<string, any> = {
+      "the_pebble": {
+        timeout: 5,
+        preprocessCode: false,
+        specialRules: ["extended_timeout"]
+      },
+      "merger": {
+        timeout: 1,
+        preprocessCode: true,
+        specialRules: ["remove_operators"]
+      },
+      "gargantuan": {
+        timeout: 1,
+        preprocessCode: true,
+        specialRules: ["remove_bigint"]
+      }
+    };
+
+    return configs[puzzleName] || {
+      timeout: this.DEFAULT_TIMEOUT,
+      preprocessCode: false,
+      specialRules: []
+    };
   }
 }

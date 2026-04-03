@@ -1,0 +1,7 @@
+# The Thicket
+
+Deep within the verdant embrace of Algorion lies the Thicket, a labyrinthine forest where the line between flora and fauna blurs in the most extraordinary ways. The Thicket is not merely a forest; it is a living, breathing entity, where trees communicate through the rustle of leaves and the whisper of branches. The inhabitants of this enigmatic woodland, known as the Tangled, have mastered the art of understanding and interpreting these signals, allowing them to navigate the ever-shifting landscape that is their home.
+
+The Tangled are a community deeply rooted in the symbiosis with their environment. Their homes are nestled in the arms of ancient trees, and their society is built on the principles of mutual growth and natural wisdom. They are experts in herbal lore, tree crafting, and the subtle art of grove singing, a form of communication using the sounds of nature itself.
+
+However, a creeping malaise has begun to afflict this once harmonious land. Trails that once led to tranquil glades now loop back on themselves in maddening spirals. Paths that were clear in the morning are choked by brambles by nightfall, and trees that once offered guidance now stand silent and brooding. The natural order that guided the Thicket’s intricate ecosystem is unraveling, leaving its denizens lost and afraid.

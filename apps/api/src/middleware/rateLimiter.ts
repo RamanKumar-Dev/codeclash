@@ -46,9 +46,9 @@ export class RateLimiter {
 
       if (currentCount >= this.config.maxRequests) {
         // Rate limit exceeded
-        const oldestRequest = await this.redis.zRange(bucketKey, 0, 0, { WITHSCORES: true });
+        const oldestRequest = await this.redis.zRangeWithScores(bucketKey, 0, 0);
         const retryAfter = oldestRequest.length > 0 
-          ? Math.ceil((windowStart - oldestRequest[0][1]) / 1000)
+          ? Math.ceil((windowStart - Number(oldestRequest[0].score)) / 1000)
           : Math.ceil(this.config.windowMs / 1000);
 
         return {

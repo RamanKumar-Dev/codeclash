@@ -1,0 +1,7 @@
+# Dynamar
+
+In the labyrinthine expanses of Dynamar, every turn and twist is a calculated decision, every pathway a choice laden with consequence. Here, in this maze-like domain, the Dymads dwell—a people whose lives are as intricately woven as the complex mazes they call home. Renowned across Algorion for their prowess in solving complex, dynamic problems, the Dymads have constructed their society to mirror the principles of dynamic programming, where every decision is optimized based on the outcomes of those that preceded it.
+
+The landscape of Dynamar itself is a marvel of architectural genius, a vast, sprawling labyrinth that serves both as home and as a constant mental challenge to its inhabitants. The streets and buildings are arranged to form a physical puzzle, with routes that split and converge in a dizzying array of choices, each path leading to different sectors of the city, each sector designed to challenge the intellect and sharpen the mind.
+
+The heart of Dynamar’s culture seems to have disappeared, and the Dymads express a feeling they haven't before - hesitancy in the face of a decision. They need your help to restore their foresight, and help relearning how to solve the complex issues found in Dynamar. 

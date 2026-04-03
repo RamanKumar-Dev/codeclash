@@ -5,8 +5,9 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../index';
 import { generateTokens } from '../middleware/auth';
 import { createError } from '../middleware/errorHandler';
+import { Router } from 'express';
 
-const router = express.Router();
+const router: Router = express.Router();
 
 // Validation schemas
 const registerSchema = Joi.object({
@@ -144,7 +145,7 @@ router.post('/refresh', async (req, res, next) => {
       return next(createError('Refresh token required', 400));
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!) as { userId: string };
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET!) as { userId: string };
     
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },

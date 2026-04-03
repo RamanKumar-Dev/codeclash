@@ -1,0 +1,6 @@
+# Nodak
+Cast over thousands of acres, Nodak is an incredibly broad region within Algorion. The most notable feature of Nodak is the complexity of its paths and roads, with many different structures and residences being connected to others through exaggerated channels. This region is very interconnected through the paths, but is also deeply connected as a community. The biggest core tenet of Nodak is their connections, and the people strive to discover the innate patterns and relations to life.
+
+The inhabitants, known as Nodes, seek to understand everything the world has to offer. By being obsessed with connections and relations, Nodes typically turn to philosophy and meta ethics, taking the concept of pattern analysis to its fundamentals. 
+
+However, this once tightly-knit fabric of this society has seemingly unraveled. The once vibrant network of relationships that have become critical to their understanding has faded into obscurity. They need your help, and you feel compelled to offer a hand in repairing the beautiful web of the Nodak.

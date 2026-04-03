@@ -45,7 +45,7 @@ const userSockets = new Map<string, string>();
 app.get('/', (req, res) => {
   res.json({
     message: '🎯 Code-Clash Arena API - MVP Ready!',
-    status: 'operational',
+    apiStatus: 'operational',
     endpoints: {
       auth: {
         register: 'POST /auth/register',
@@ -63,7 +63,7 @@ app.get('/', (req, res) => {
     },
     database: 'PostgreSQL + Prisma',
     cache: 'Redis',
-    status: 'All systems operational'
+    systemStatus: 'All systems operational'
   });
 });
 

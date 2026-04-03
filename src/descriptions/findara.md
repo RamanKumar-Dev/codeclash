@@ -1,0 +1,6 @@
+# Findara
+The region of Findara is an expansive settlement populated by the Findars, eager for adventure and exploration with a deep touch for nature. The region is littered with varying huts and homes constructed with natural material. This region is by no means technology advanced, yet, still holds an incredible level of effectiveness to it. Findara is constantly expanding, and is surrounded by a slightly visible field akin to a bubble. The locals of the region seem to call this, the *Boundary*.
+
+The Findars are incredibly in touch with nature, and are extremely observant/vigilant. Their perception is unmatched in the world of Algorion. They dawn intricately woven clothes, and are often seen with druidic/animistic features like twig horns, hooves, or sometimes even fur. Their incredible attunement to nature is likely what allows the society to perform so well, having quick access to resources and new regions.
+
+Disaster has struck Findara by means of the *Boundary,* which is said to be incredibly important to the state of Findara. You're not quite sure what it does, but it has been shrinking - and fast. As it does, the Findars begin to lose their perception and attunement with nature, posing a threat to their ability to hunt and gather.

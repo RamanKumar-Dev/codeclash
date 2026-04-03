@@ -1,0 +1,7 @@
+# Arithmend
+
+In the perfectly ordered world of Arithmend, where geometric precision shapes the landscape and the minds of its people, everything conforms to the serene, exacting principles of symmetry and mathematics. Here, in a landscape dotted with complex geometric structures, from icosahedrons to dodecahedrons, the Numerians—a people defined by their flawless, symmetrical beauty—live in harmonious alignment with the principles of pure arithmetic.
+
+Arithmend itself is a visual symphony of mathematical harmony, where each building and pathway is a testament to the Numerians' mastery over numbers and their spatial manifestations. This region is not just a place but a canvas, where mathematics breathes life into the stone and structure. Numerians, dressed in garments patterned after mathematical formulas, communicate not only through words but through equations, using their attire to express complex theorems and proofs.
+
+However, recent times have seen a fracture in this perfect facade. The once impeccable structures show signs of disarray; their once unshakeable confidence in their mathematical prowess wanes as the foundational truths they have so long adhered to begin to crumble. The breakdown in structural integrity has brought a palpable tension to Arithmend, with its citizens growing uncertain in the face of architectural and conceptual chaos.

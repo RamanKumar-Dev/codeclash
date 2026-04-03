@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import jwt, { SignOptions } from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/prisma';
@@ -20,7 +20,7 @@ interface JWTPayload {
 
 export class AuthMiddleware {
   private static JWT_SECRET = process.env.JWT_SECRET || 'mvp-secret-key';
-  private static JWT_EXPIRES_IN = '7d';
+  private static JWT_EXPIRES_IN = 7 * 24 * 60 * 60; // 7 days in seconds
 
   // Rate limiting for auth endpoints
   static rateLimiter = rateLimit({
@@ -33,18 +33,18 @@ export class AuthMiddleware {
 
   // Generate JWT token
   static generateToken(user: { id: string; username: string; email: string }): string {
-    const payload: JWTPayload = {
+    const payload = {
       userId: user.id,
       username: user.username,
       email: user.email,
     };
 
-    return jwt.sign(payload, this.JWT_SECRET, { expiresIn: this.JWT_EXPIRES_IN });
+    return jwt.sign(payload, this.JWT_SECRET as string, { expiresIn: this.JWT_EXPIRES_IN });
   }
 
   // Verify JWT token
   static verifyToken(token: string): JWTPayload {
-    return jwt.verify(token, this.JWT_SECRET) as JWTPayload;
+    return jwt.verify(token, this.JWT_SECRET as string) as JWTPayload;
   }
 
   // Hash password

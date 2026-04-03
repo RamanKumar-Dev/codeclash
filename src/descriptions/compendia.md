@@ -1,0 +1,6 @@
+# Compendia
+At the foothold of Compendia is knowledge, and it boasts having the single best academic institution throughout all of Algorion. Because of this, Compendia has one of the more diverse demographics among Algorion nations. The key to this accomplishment is organization. The nation is extremely organized, sorted throughout multiple criteria. The university is well tailored to every path, and extremely accessible due to all of its content and curriculum being strictly sorted.
+
+Most of the natives in Compendia follow their academic pursuits that the culture is built upon, honoring accessibility and the power of organization. Typically wearing robes or other scholarly garbs, the Compends spend their time finding qualitative and quantitative to the world around us.
+
+The biggest issue Compendia has been facing is sheer and utter chaos. Books of the library have suddenly rearranged themselves, families appearing in wrong houses overnight, and the address system being in complete disarray. This seems inconvenient, but these occurences have added up, resulting in a largely dysfunctional Compendia like never seen before.
