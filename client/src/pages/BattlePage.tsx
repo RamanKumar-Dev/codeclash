@@ -1,276 +1,480 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
+import Editor from '@monaco-editor/react';
 import { useAuthStore } from '../stores/authStore';
 import { useBattleStore } from '../stores/battleStore';
+import { HpBar } from '../components/HpBar';
+import { SpellPanel } from '../components/SpellPanel';
+
+const SERVER_URL = 'http://localhost:3001';
+const MAX_HP = 500;
+
+const LANGUAGES = [
+  { id: 63,  label: 'JavaScript', monacoLang: 'javascript' },
+  { id: 71,  label: 'Python',     monacoLang: 'python'     },
+  { id: 54,  label: 'C++',        monacoLang: 'cpp'        },
+  { id: 62,  label: 'Java',       monacoLang: 'java'       },
+];
+
+interface DamageToast { id: string; text: string; color: string; }
+interface AchievementToast { id: string; name: string; icon: string; }
 
 export const BattlePage: React.FC = () => {
+  const { roomId: paramRoomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
   const { user, token } = useAuthStore();
   const {
-    roomId,
-    puzzle,
-    myHp,
-    opponentHp,
-    status,
-    damageLog,
-    timeRemaining,
-    opponentName,
-    winnerName,
-    eloChange,
-    setBattle,
-    setHp,
-    addDamage,
-    setStatus,
-    setTimeRemaining,
-    setEnd,
-    reset,
+    roomId, puzzle, myHp, opponentHp, status, timeRemaining, opponentName,
+    winnerName, eloChange, setBattle, setHp, addDamage, setStatus,
+    setTimeRemaining, setEnd, reset,
   } = useBattleStore();
 
-  const [code, setCode] = useState('');
-  const [languageId, setLanguageId] = useState(71); // Python
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [code, setCode] = useState('// Write your solution here\n');
+  const [langId, setLangId] = useState(63); // JS default
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [damageToasts, setDamageToasts] = useState<DamageToast[]>([]);
+  const [achievementToasts, setAchievementToasts] = useState<AchievementToast[]>([]);
+  const [submitResult, setSubmitResult] = useState<any>(null);
+  const [isSlowed, setIsSlowed] = useState(false);
+  const [opponentActivity, setOpponentActivity] = useState(0);
+  const timerRef = useRef<number | null>(null);
 
+  // Countdown timer
   useEffect(() => {
-    if (!token) {
-      navigate('/login');
-      return;
+    if (status === 'ACTIVE' && timeRemaining > 0) {
+      timerRef.current = window.setInterval(() => {
+        setTimeRemaining(Math.max(0, timeRemaining - 1));
+      }, 1000);
     }
+    return () => clearInterval(timerRef.current!);
+  }, [status, timeRemaining]);
 
-    // Connect to Socket.io
-    const newSocket = io('http://localhost:3001');
-    setSocket(newSocket);
+  // Socket setup
+  useEffect(() => {
+    if (!token) { navigate('/login'); return; }
 
-    // Authenticate
-    newSocket.emit('authenticate', { token });
+    const sock = io(SERVER_URL);
+    setSocket(sock);
+    sock.emit('authenticate', { token });
 
-    // Socket event handlers
-    newSocket.on('match:found', (data) => {
+    sock.on('match:found', (data: any) => {
       setBattle(data.roomId, data.puzzle, data.opponentName);
-      setTimeRemaining(data.timeLimitSeconds);
+      setTimeRemaining(data.timeLimitSeconds || 300);
     });
 
-    newSocket.on('battle:countdown', (data) => {
-      console.log(`Countdown: ${data.secondsLeft}`);
+    sock.on('battle:countdown', (data: any) => {
+      setCountdown(data.secondsLeft);
+      setStatus('COUNTDOWN');
     });
 
-    newSocket.on('battle:start', () => {
+    sock.on('battle:start', () => {
+      setCountdown(null);
       setStatus('ACTIVE');
     });
 
-    newSocket.on('battle:opponent_activity', (data) => {
-      console.log(`Opponent submitted ${data.submissionCount} times`);
-    });
-
-    newSocket.on('battle:damage', (data) => {
+    sock.on('battle:damage', (data: any) => {
       setHp(data.hp1, data.hp2);
       addDamage(data.attackerName, data.damage);
+      addToast(`💥 ${data.attackerName} dealt ${data.damage} DMG!`, data.damage > 60 ? 'var(--magenta)' : 'var(--red)');
     });
 
-    newSocket.on('battle:time_warning', (data) => {
-      setTimeRemaining(data.secondsLeft);
+    sock.on('battle:no_damage', (data: any) => {
+      addToast(`❌ ${data.attackerName} failed (${data.passedTests}/${data.totalTests})`, 'var(--text-secondary)');
     });
 
-    newSocket.on('battle:end', (data) => {
-      setEnd(data.winnerName, data.eloChange);
+    sock.on('battle:opponent_activity', (data: any) => {
+      setOpponentActivity(data.submissionCount);
+    });
+
+    sock.on('battle:time_warning', () => {
+      addToast('⏰ 60 seconds remaining!', 'var(--gold)');
+    });
+
+    sock.on('battle:end', (data: any) => {
+      setEnd(data.winnerName, data.winnerEloChange || data.eloChange);
       setStatus('ENDED');
+      if (data.newAchievements?.length > 0) {
+        data.newAchievements.forEach((a: any) => {
+          setAchievementToasts(prev => [...prev, { id: Math.random().toString(36), name: a.name, icon: a.icon }]);
+        });
+      }
     });
 
-    return () => {
-      newSocket.close();
-    };
-  }, [token, navigate, setBattle, setTimeRemaining, setStatus, setHp, addDamage, setEnd]);
+    sock.on('submit:judging', () => { setStatus('JUDGING'); setIsSubmitting(true); });
 
-  const handleSubmitCode = async () => {
-    if (!roomId || !socket || isSubmitting) return;
-
-    setIsSubmitting(true);
-    setStatus('JUDGING');
-
-    try {
-      socket.emit('battle:submit', {
-        code,
-        languageId,
-        roomId,
-      });
-    } catch (error) {
-      console.error('Error submitting code:', error);
-    } finally {
+    sock.on('submit:result', (data: any) => {
       setIsSubmitting(false);
       setStatus('ACTIVE');
+      setSubmitResult(data);
+      setTimeout(() => setSubmitResult(null), 5000);
+    });
+
+    sock.on('submit:error', (msg: string) => {
+      setIsSubmitting(false);
+      setStatus('ACTIVE');
+      addToast(`⚠️ ${msg}`, 'var(--red)');
+    });
+
+    sock.on('spell:incoming', (data: any) => {
+      addToast(`🪄 ${data.casterName} cast ${data.spellType.replace('_', ' ')}!`, 'var(--magenta)');
+      if (data.spellType === 'slow') {
+        setIsSlowed(true);
+        setTimeout(() => setIsSlowed(false), data.duration || 10000);
+      }
+    });
+
+    // If navigating directly to /battle/:roomId but no battle in store yet,
+    // the socket will receive match:found on reconnection
+    if (paramRoomId && !roomId) {
+      sock.on('authenticated', () => {
+        // Try to rejoin room
+        sock.emit('battle:rejoin', { roomId: paramRoomId });
+      });
+    }
+
+    return () => { sock.close(); clearInterval(timerRef.current!); };
+  }, [token]);
+
+  const addToast = (text: string, color: string) => {
+    const id = Math.random().toString(36);
+    setDamageToasts(prev => [...prev.slice(-4), { id, text, color }]);
+    setTimeout(() => setDamageToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  };
+
+  const handleSubmit = useCallback(() => {
+    if (!socket || !roomId || isSubmitting || status !== 'ACTIVE' || isSlowed) return;
+    socket.emit('battle:submit', { code, languageId: langId, roomId });
+  }, [socket, roomId, code, langId, isSubmitting, status, isSlowed]);
+
+  const handleForfeit = () => {
+    if (!socket || !roomId) return;
+    if (confirm('Are you sure you want to forfeit?')) {
+      socket.emit('battle:forfeit', { roomId });
     }
   };
 
-  const handleForfeit = () => {
-    if (!roomId || !socket) return;
-    socket.emit('battle:forfeit', { roomId });
-  };
+  const handlePlayAgain = () => { reset(); navigate('/lobby'); };
 
-  const handlePlayAgain = () => {
-    reset();
-    navigate('/lobby');
-  };
+  const monacoLang = LANGUAGES.find(l => l.id === langId)?.monacoLang || 'javascript';
+  const timerColor = timeRemaining < 30 ? 'var(--red)' : timeRemaining < 60 ? 'var(--gold)' : 'var(--cyan)';
+  const isWinner = winnerName === user?.username;
 
-  const getHpColor = (hp: number) => {
-    if (hp > 200) return 'bg-green-500';
-    if (hp > 100) return 'bg-yellow-500';
-    return 'bg-red-500';
-  };
-
-  const getHpPercentage = (hp: number) => {
-    return (hp / 300) * 100;
-  };
-
-  if (!roomId) {
+  if (!roomId && !paramRoomId) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="text-white text-xl">Finding opponent...</div>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
+        <div className="spinner" />
+        <p style={{ color: 'var(--text-muted)' }}>Connecting to battle...</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* HP Bars and Timer */}
-      <div className="bg-gray-800 p-4 border-b border-gray-700">
-        <div className="flex items-center justify-between max-w-6xl mx-auto">
+    <div className="scanlines" style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+      <div className="bg-grid" style={{ opacity: 0.3 }} />
+
+      {/* ── Header: HP + Timer ──────────────────────────────── */}
+      <div style={{
+        background: 'var(--bg-panel)',
+        borderBottom: '1px solid var(--border-dim)',
+        padding: '10px 20px',
+        flexShrink: 0,
+        position: 'relative',
+        zIndex: 10,
+      }}>
+        <div style={{ maxWidth: 1200, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 20 }}>
           {/* My HP */}
-          <div className="flex-1 mr-4">
-            <div className="text-sm text-gray-400 mb-1">Your HP</div>
-            <div className="bg-gray-700 rounded-full h-8 overflow-hidden">
-              <div
-                className={`h-full transition-all duration-500 ${getHpColor(myHp)}`}
-                style={{ width: `${getHpPercentage(myHp)}%` }}
-              />
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: '0.8rem' }}>
+              <span style={{ fontWeight: 700, color: 'var(--cyan)' }}>⚔️ {user?.username}</span>
+              <span style={{ fontFamily: 'var(--font-code)', color: myHp > 100 ? 'var(--green)' : 'var(--red)' }}>{myHp}/{MAX_HP}</span>
             </div>
-            <div className="text-sm mt-1">{myHp}/300</div>
+            <HpBar current={myHp} max={MAX_HP} />
           </div>
 
           {/* Timer */}
-          <div className="text-center">
-            <div className="text-2xl font-bold">
-              {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+          <div style={{ textAlign: 'center', minWidth: 90 }}>
+            <div style={{ fontFamily: 'var(--font-code)', fontSize: '1.6rem', fontWeight: 800, color: timerColor,
+              textShadow: `0 0 12px ${timerColor}`,
+            }}>
+              {Math.floor(timeRemaining / 60)}:{String(timeRemaining % 60).padStart(2, '0')}
             </div>
-            <div className="text-sm text-gray-400">Time Remaining</div>
+            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+              {status === 'JUDGING' ? '⚡ JUDGING' : status === 'COUNTDOWN' ? '🕐 READY' : status}
+            </div>
           </div>
 
           {/* Opponent HP */}
-          <div className="flex-1 ml-4">
-            <div className="text-sm text-gray-400 mb-1">{opponentName} HP</div>
-            <div className="bg-gray-700 rounded-full h-8 overflow-hidden">
-              <div
-                className={`h-full transition-all duration-500 ${getHpColor(opponentHp)}`}
-                style={{ width: `${getHpPercentage(opponentHp)}%` }}
-              />
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: '0.8rem' }}>
+              <span style={{ fontFamily: 'var(--font-code)', color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                {opponentActivity > 0 ? `🔥 ${opponentActivity} submits` : ''}
+              </span>
+              <span style={{ fontWeight: 700, color: 'var(--magenta)' }}>💀 {opponentName}</span>
+              <span style={{ fontFamily: 'var(--font-code)', color: opponentHp > 100 ? 'var(--green)' : 'var(--red)' }}>{opponentHp}/{MAX_HP}</span>
             </div>
-            <div className="text-sm mt-1">{opponentHp}/300</div>
+            <HpBar current={opponentHp} max={MAX_HP} reversed />
           </div>
         </div>
       </div>
 
-      {/* Battle Area */}
-      <div className="flex h-screen">
-        {/* Puzzle Description */}
-        <div className="w-1/2 bg-gray-800 p-6 overflow-y-auto">
-          <h2 className="text-2xl font-bold mb-4 text-green-400">{puzzle?.title}</h2>
-          <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-2">Description</h3>
-            <p className="text-gray-300">{puzzle?.description}</p>
+      {/* ── Main Area ─────────────────────────────────────────*/}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative', zIndex: 5 }}>
+
+        {/* LEFT: Problem Panel */}
+        <div style={{
+          width: '38%',
+          borderRight: '1px solid var(--border-dim)',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--bg-panel)',
+          overflow: 'hidden',
+        }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+            {puzzle ? (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                  <h2 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--cyan)' }}>{puzzle.title}</h2>
+                  <span className={`diff-${puzzle.difficulty}`}>{puzzle.difficulty}</span>
+                </div>
+
+                <p style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: '0.9rem', marginBottom: 20, whiteSpace: 'pre-wrap' }}>
+                  {puzzle.description}
+                </p>
+
+                {puzzle.examples?.length > 0 && (
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 10 }}>
+                      Examples
+                    </div>
+                    {puzzle.examples.slice(0, 3).map((ex: any, i: number) => (
+                      <div key={i} style={{
+                        background: 'var(--bg-deep)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: 12,
+                        marginBottom: 8,
+                        fontFamily: 'var(--font-code)',
+                        fontSize: '0.8rem',
+                      }}>
+                        <div><span style={{ color: 'var(--text-muted)' }}>Input: </span><span style={{ color: 'var(--cyan)' }}>{ex.input}</span></div>
+                        <div><span style={{ color: 'var(--text-muted)' }}>Output: </span><span style={{ color: 'var(--green)' }}>{ex.output}</span></div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {puzzle.tags?.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {puzzle.tags.map((tag: string) => (
+                      <span key={tag} className="tag-chip">{tag}</span>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
+                Loading puzzle...
+              </div>
+            )}
           </div>
 
-          {puzzle?.examples && (
-            <div className="mb-6">
-              <h3 className="text-lg font-semibold mb-2">Examples</h3>
-              {puzzle.examples.map((example, index) => (
-                <div key={index} className="bg-gray-700 p-3 rounded mb-2">
-                  <div className="text-sm text-gray-400">Input:</div>
-                  <div className="font-mono">{example.input}</div>
-                  <div className="text-sm text-gray-400 mt-2">Output:</div>
-                  <div className="font-mono">{example.output}</div>
-                </div>
-              ))}
+          {/* Spell Panel at bottom */}
+          <div style={{ padding: 16, borderTop: '1px solid var(--border-dim)' }}>
+            <SpellPanel socket={socket} roomId={roomId} disabled={status !== 'ACTIVE'} />
+          </div>
+        </div>
+
+        {/* RIGHT: Code Editor */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0d1117' }}>
+          {/* Editor Toolbar */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 16px',
+            background: 'var(--bg-panel)',
+            borderBottom: '1px solid var(--border-dim)',
+          }}>
+            <select
+              value={langId}
+              onChange={e => setLangId(Number(e.target.value))}
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-dim)',
+                borderRadius: 'var(--radius-md)',
+                color: 'var(--text-primary)',
+                padding: '5px 10px',
+                fontFamily: 'var(--font-ui)',
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+              }}
+            >
+              {LANGUAGES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+            </select>
+
+            {isSlowed && (
+              <div style={{ color: 'var(--magenta)', fontWeight: 700, fontSize: '0.85rem', animation: 'blink 0.5s ease-in-out infinite' }}>
+                🌀 SLOWED
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                id="forfeit-btn"
+                onClick={handleForfeit}
+                disabled={status === 'ENDED'}
+                className="btn btn-sm btn-red"
+              >
+                Forfeit
+              </button>
+              <button
+                id="submit-btn"
+                onClick={handleSubmit}
+                disabled={isSubmitting || status !== 'ACTIVE' || isSlowed}
+                className="btn btn-sm btn-cyan"
+                style={{ minWidth: 100 }}
+              >
+                {isSubmitting ? '⏳ Judging...' : '▶ Submit'}
+              </button>
+            </div>
+          </div>
+
+          {/* Monaco Editor */}
+          <div style={{ flex: 1, pointerEvents: isSlowed ? 'none' : 'auto', opacity: isSlowed ? 0.5 : 1 }}>
+            <Editor
+              height="100%"
+              language={monacoLang}
+              value={code}
+              onChange={v => setCode(v || '')}
+              theme="vs-dark"
+              options={{
+                fontSize: 14,
+                fontFamily: '"JetBrains Mono", monospace',
+                minimap: { enabled: false },
+                wordWrap: 'on',
+                lineNumbers: 'on',
+                scrollBeyondLastLine: false,
+                readOnly: status === 'ENDED' || isSubmitting,
+                padding: { top: 12 },
+              }}
+            />
+          </div>
+
+          {/* Submit Result Banner */}
+          {submitResult && (
+            <div style={{
+              padding: '10px 20px',
+              background: submitResult.passed
+                ? 'rgba(0,255,136,0.1)' : submitResult.passedTests > 0
+                ? 'rgba(255,215,0,0.1)' : 'rgba(255,48,96,0.1)',
+              borderTop: `1px solid ${submitResult.passed ? 'rgba(0,255,136,0.3)' : submitResult.passedTests > 0 ? 'rgba(255,215,0,0.3)' : 'rgba(255,48,96,0.3)'}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: '0.85rem',
+              animation: 'toast-in 0.3s ease',
+            }}>
+              <span style={{ color: submitResult.passed ? 'var(--green)' : submitResult.passedTests > 0 ? 'var(--gold)' : 'var(--red)', fontWeight: 700 }}>
+                {submitResult.passed ? '✅ All tests passed!' : submitResult.passedTests > 0 ? `⚠️ ${submitResult.passedTests}/${submitResult.totalTests} tests passed` : '❌ No tests passed'}
+              </span>
+              {submitResult.damage > 0 && (
+                <span style={{ color: 'var(--magenta)', fontWeight: 700, fontFamily: 'var(--font-code)' }}>
+                  💥 -{submitResult.damage} HP dealt!
+                </span>
+              )}
+              <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
+                ⚡ {Math.round(submitResult.avgRuntimeMs)}ms avg
+              </span>
             </div>
           )}
-
-          <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-2">Language</h3>
-            <select
-              value={languageId}
-              onChange={(e) => setLanguageId(Number(e.target.value))}
-              className="bg-gray-700 text-white px-4 py-2 rounded"
-            >
-              <option value={71}>Python</option>
-              <option value={63}>JavaScript</option>
-              <option value={54}>C++</option>
-              <option value={62}>Java</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Code Editor */}
-        <div className="w-1/2 bg-gray-900 p-6 flex flex-col">
-          <textarea
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="Write your code here..."
-            className="flex-1 bg-gray-800 text-white font-mono p-4 rounded border border-gray-700 focus:border-green-400 focus:outline-none resize-none"
-            disabled={status === 'JUDGING' || status === 'ENDED'}
-          />
-
-          {/* Action Buttons */}
-          <div className="flex gap-4 mt-4">
-            <button
-              onClick={handleSubmitCode}
-              disabled={isSubmitting || status !== 'ACTIVE'}
-              className="flex-1 bg-green-500 hover:bg-green-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded transition duration-200"
-            >
-              {isSubmitting ? 'Executing...' : 'Submit Code'}
-            </button>
-            <button
-              onClick={handleForfeit}
-              disabled={status === 'ENDED'}
-              className="bg-red-500 hover:bg-red-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded transition duration-200"
-            >
-              Forfeit
-            </button>
-          </div>
         </div>
       </div>
 
-      {/* Battle End Overlay */}
+      {/* ── Countdown Overlay ──────────────────────────────────*/}
+      {countdown !== null && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 50,
+          background: 'rgba(4,8,16,0.85)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          backdropFilter: 'blur(4px)',
+        }}>
+          <div key={countdown} className="countdown-number" style={{
+            fontSize: countdown === 0 ? '5rem' : '12rem',
+            fontWeight: 900,
+            fontFamily: 'var(--font-code)',
+            color: countdown > 1 ? 'var(--cyan)' : 'var(--green)',
+            textShadow: `0 0 60px ${countdown > 1 ? 'rgba(0,245,255,0.7)' : 'rgba(0,255,136,0.7)'}`,
+          }}>
+            {countdown > 0 ? countdown : 'GO!'}
+          </div>
+        </div>
+      )}
+
+      {/* ── Battle End Overlay ────────────────────────────────*/}
       {status === 'ENDED' && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-          <div className="bg-gray-800 p-8 rounded-lg text-center max-w-md">
-            <h2 className="text-3xl font-bold mb-4">
-              {winnerName === user?.username ? (
-                <span className="text-green-400">Victory!</span>
-              ) : (
-                <span className="text-red-400">Defeat</span>
-              )}
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 50,
+          background: 'rgba(4,8,16,0.9)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          backdropFilter: 'blur(8px)',
+        }}>
+          <div className="victory-card card-glow" style={{ padding: 48, textAlign: 'center', maxWidth: 450, width: '90%' }}>
+            <div style={{ fontSize: '4rem', marginBottom: 12 }}>{isWinner ? '🏆' : '💀'}</div>
+            <h2 style={{
+              fontSize: '2.5rem', fontWeight: 900, marginBottom: 12,
+              color: isWinner ? 'var(--gold)' : 'var(--red)',
+              textShadow: isWinner ? 'var(--glow-gold)' : 'var(--glow-red)',
+            }}>
+              {isWinner ? 'VICTORY!' : 'DEFEAT'}
             </h2>
-            <div className="mb-6">
-              <div className="text-xl mb-2">Winner: {winnerName}</div>
-              <div className="text-lg">ELO Change: {eloChange > 0 ? '+' : ''}{eloChange}</div>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 24, fontSize: '1.1rem' }}>
+              Winner: <strong style={{ color: 'var(--text-primary)' }}>{winnerName}</strong>
+            </p>
+            <div style={{ fontFamily: 'var(--font-code)', fontSize: '1.4rem', fontWeight: 800, marginBottom: 32,
+              color: isWinner ? 'var(--green)' : 'var(--red)',
+            }}>
+              ELO {isWinner ? '+' : ''}{eloChange}
             </div>
-            <button
-              onClick={handlePlayAgain}
-              className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded transition duration-200"
-            >
-              Play Again
+            <button id="play-again-btn" onClick={handlePlayAgain} className="btn btn-cyan btn-lg" style={{ width: '100%' }}>
+              Play Again →
             </button>
           </div>
         </div>
       )}
 
-      {/* Damage Toasts */}
-      <div className="fixed top-20 right-4 space-y-2">
-        {damageLog.slice(-3).map((log) => (
-          <div
-            key={log.id}
-            className="bg-red-500 text-white px-4 py-2 rounded animate-pulse"
-          >
-            {log.attackerName} dealt {log.damage} damage!
+      {/* ── Damage Toasts ────────────────────────────────────*/}
+      <div style={{ position: 'fixed', top: 80, right: 16, zIndex: 40, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {damageToasts.map(t => (
+          <div key={t.id} className="damage-toast" style={{
+            padding: '8px 14px',
+            background: 'var(--bg-card)',
+            border: `1px solid ${t.color}`,
+            borderRadius: 'var(--radius-md)',
+            color: t.color,
+            fontSize: '0.85rem',
+            fontWeight: 700,
+            maxWidth: 260,
+            boxShadow: `0 0 12px ${t.color}40`,
+          }}>
+            {t.text}
+          </div>
+        ))}
+      </div>
+
+      {/* ── Achievement Toasts ───────────────────────────────*/}
+      <div style={{ position: 'fixed', bottom: 24, right: 16, zIndex: 40, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {achievementToasts.map(a => (
+          <div key={a.id} className="achievement-toast" style={{ padding: '12px 16px', maxWidth: 260 }}>
+            <div style={{ fontSize: '0.65rem', color: 'var(--gold)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 4 }}>
+              🏅 Achievement Unlocked!
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '1.5rem' }}>{a.icon}</span>
+              <span style={{ fontWeight: 700, color: 'var(--gold)' }}>{a.name}</span>
+            </div>
           </div>
         ))}
       </div>

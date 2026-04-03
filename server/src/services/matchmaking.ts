@@ -1,238 +1,321 @@
 import { Server, Socket } from 'socket.io';
-import { createClient, RedisClientType } from 'redis';
-import { 
-  User, 
-  Battle, 
-  Puzzle, 
-  BattleState, 
-  QueueJoinEvent, 
-  BattleSubmitEvent, 
-  BattleForfeitEvent,
-  MatchFoundEvent,
-  BattleDamageEvent,
-  BattleEndEvent
-} from '@code-clash/shared-types/mvp-types';
+import { RedisClientType } from 'redis';
+import { nanoid } from 'nanoid';
+import { UserService } from './userService';
+import { ProblemService } from './problemService';
+
+interface QueueEntry {
+  userId: string;
+  elo: number;
+  joinedAt: number;
+  eloWindow: number;
+}
+
+interface BattleState {
+  player1Id: string;
+  player2Id: string;
+  problemId: string;
+  hp1: number;
+  hp2: number;
+  startTimestamp: number;
+  status: 'WAITING' | 'COUNTDOWN' | 'ACTIVE' | 'JUDGING' | 'ENDED';
+  sub1Count: number;
+  sub2Count: number;
+  matchId?: string;
+}
+
+const INITIAL_HP = 500;
+const INITIAL_ELO_WINDOW = 150;
+const ELO_EXPAND_RATE = 75;      // ELO window expands by this every 10s
+const MAX_ELO_WINDOW = 600;
+const TICK_INTERVAL_MS = 2000;   // Matchmaking tick every 2s
 
 export class MatchmakingService {
   private io: Server;
   private redis: RedisClientType;
-  private queue: string[] = []; // In-memory queue for MVP
+  private socketRegistry: Map<string, Socket>;
+  private queue: Map<string, QueueEntry> = new Map();
+  private tickInterval: NodeJS.Timeout | null = null;
 
-  constructor(io: Server, redis: RedisClientType) {
+  constructor(io: Server, redis: RedisClientType, socketRegistry: Map<string, Socket>) {
     this.io = io;
     this.redis = redis;
+    this.socketRegistry = socketRegistry;
+    this.startMatchmakingLoop();
   }
 
-  // Add user to queue
-  async addToQueue(userId: string): Promise<void> {
-    // Check if user is already in queue
-    if (this.queue.includes(userId)) {
+  /** Add player to queue */
+  async addToQueue(userId: string, elo: number = 1000): Promise<void> {
+    if (this.queue.has(userId)) return;
+
+    const entry: QueueEntry = {
+      userId,
+      elo,
+      joinedAt: Date.now(),
+      eloWindow: INITIAL_ELO_WINDOW,
+    };
+
+    this.queue.set(userId, entry);
+
+    // Also store in Redis for crash resilience (TTL 5 min)
+    await this.redis.setEx(
+      `queue:player:${userId}`,
+      300,
+      JSON.stringify(entry)
+    );
+
+    console.log(`[Queue] ${userId} joined (ELO: ${elo}). Queue size: ${this.queue.size}`);
+  }
+
+  /** Remove player from queue */
+  async removeFromQueue(userId: string): Promise<void> {
+    if (this.queue.delete(userId)) {
+      await this.redis.del(`queue:player:${userId}`);
+      console.log(`[Queue] ${userId} left. Queue size: ${this.queue.size}`);
+    }
+  }
+
+  /** Matchmaking loop — runs every 2s */
+  private startMatchmakingLoop(): void {
+    this.tickInterval = setInterval(() => {
+      this.tick();
+    }, TICK_INTERVAL_MS);
+  }
+
+  private async tick(): Promise<void> {
+    const now = Date.now();
+    const players = Array.from(this.queue.values());
+
+    // Expand ELO windows over time
+    for (const p of players) {
+      const ageSeconds = (now - p.joinedAt) / 1000;
+      p.eloWindow = Math.min(
+        INITIAL_ELO_WINDOW + Math.floor(ageSeconds / 10) * ELO_EXPAND_RATE,
+        MAX_ELO_WINDOW
+      );
+    }
+
+    // Sort by join time (FIFO within ELO window)
+    players.sort((a, b) => a.joinedAt - b.joinedAt);
+
+    // Send queue position updates
+    players.forEach((p, idx) => {
+      const socket = this.socketRegistry.get(p.userId);
+      if (socket) {
+        const waitMs = now - p.joinedAt;
+        socket.emit('queue:position', {
+          position: idx + 1,
+          total: players.length,
+          waitSeconds: Math.floor(waitMs / 1000),
+          estimatedWaitSeconds: Math.max(0, (players.length - idx) * 3),
+        });
+      }
+    });
+
+    // Try to match players
+    const matched = new Set<string>();
+    for (let i = 0; i < players.length; i++) {
+      if (matched.has(players[i].userId)) continue;
+      for (let j = i + 1; j < players.length; j++) {
+        if (matched.has(players[j].userId)) continue;
+        const eloDiff = Math.abs(players[i].elo - players[j].elo);
+        const window = Math.min(players[i].eloWindow, players[j].eloWindow);
+        if (eloDiff <= window) {
+          matched.add(players[i].userId);
+          matched.add(players[j].userId);
+          await this.createMatch(players[i], players[j]);
+          break;
+        }
+      }
+    }
+  }
+
+  private async createMatch(p1: QueueEntry, p2: QueueEntry): Promise<void> {
+    // Remove from queue first
+    this.queue.delete(p1.userId);
+    this.queue.delete(p2.userId);
+    await this.redis.del(`queue:player:${p1.userId}`);
+    await this.redis.del(`queue:player:${p2.userId}`);
+
+    const roomId = `battle_${nanoid(10)}`;
+
+    // Pick a problem suited to average ELO
+    const avgElo = (p1.elo + p2.elo) / 2;
+    const problem = await this.selectProblemForElo(avgElo);
+    if (!problem) {
+      console.error('[Match] No problems found — cannot create match');
       return;
     }
 
-    this.queue.push(userId);
-    console.log(`User ${userId} joined queue. Queue size: ${this.queue.length}`);
+    // Get player usernames
+    const [user1, user2] = await Promise.all([
+      UserService.getUserById(p1.userId),
+      UserService.getUserById(p2.userId),
+    ]);
+    const player1Name = user1?.username || `Player_${p1.userId.slice(0, 4)}`;
+    const player2Name = user2?.username || `Player_${p2.userId.slice(0, 4)}`;
 
-    // Try to find match
-    await this.tryMatchmaking();
-  }
-
-  // Remove user from queue
-  async removeFromQueue(userId: string): Promise<void> {
-    const index = this.queue.indexOf(userId);
-    if (index > -1) {
-      this.queue.splice(index, 1);
-      console.log(`User ${userId} left queue. Queue size: ${this.queue.length}`);
+    // Create match record in DB
+    let matchId: string | undefined;
+    try {
+      const match = await this.createMatchRecord(p1.userId, p2.userId, problem.id);
+      matchId = match.id;
+    } catch (e) {
+      console.error('[Match] Failed to create DB record:', e);
     }
-  }
-
-  // Try to find matches
-  private async tryMatchmaking(): Promise<void> {
-    while (this.queue.length >= 2) {
-      const player1Id = this.queue.shift()!;
-      const player2Id = this.queue.shift()!;
-
-      await this.createMatch(player1Id, player2Id);
-    }
-  }
-
-  // Create a match between two players
-  private async createMatch(player1Id: string, player2Id: string): Promise<void> {
-    const roomId = `battle_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    // Get random puzzle from the 5 seeded puzzles
-    const puzzles = await this.getSeededPuzzles();
-    const puzzle = puzzles[Math.floor(Math.random() * puzzles.length)];
-
-    // Create battle record in MongoDB (simplified for MVP)
-    const battle: Battle = {
-      id: Math.random().toString(36).substr(2, 9),
-      roomId,
-      player1Id,
-      player2Id,
-      puzzleId: puzzle.id,
-      createdAt: new Date(),
-    };
-
-    // TODO: Save battle to MongoDB
-    console.log('Created battle:', battle);
 
     // Initialize battle state in Redis
     const battleState: BattleState = {
-      player1Id,
-      player2Id,
-      hp1: 300, // Starting HP
-      hp2: 300,
+      player1Id: p1.userId,
+      player2Id: p2.userId,
+      problemId: problem.id,
+      hp1: INITIAL_HP,
+      hp2: INITIAL_HP,
       startTimestamp: Date.now(),
       status: 'WAITING',
       sub1Count: 0,
       sub2Count: 0,
+      matchId,
     };
 
-    await this.redis.setEx(`battle:${roomId}`, 2400, JSON.stringify(battleState)); // 40 minutes TTL
+    await this.redis.setEx(
+      `battle:${roomId}`,
+      7200, // 2 hour TTL
+      JSON.stringify(battleState)
+    );
 
-    // Get user info for opponent names
-    const player1Name = await this.getUserName(player1Id);
-    const player2Name = await this.getUserName(player2Id);
+    // Notify both players
+    const socket1 = this.socketRegistry.get(p1.userId);
+    const socket2 = this.socketRegistry.get(p2.userId);
 
-    // Move both sockets into room
-    const player1Socket = await this.getUserSocket(player1Id);
-    const player2Socket = await this.getUserSocket(player2Id);
+    const matchPayload1 = {
+      roomId,
+      opponentName: player2Name,
+      opponentElo: p2.elo,
+      puzzle: this.formatPuzzle(problem),
+      timeLimitSeconds: Math.floor(problem.timeLimitMs / 1000),
+      myHp: INITIAL_HP,
+      opponentHp: INITIAL_HP,
+    };
 
-    if (player1Socket) {
-      player1Socket.join(roomId);
-      player1Socket.emit('match:found', {
-        roomId,
-        opponentName: player2Name,
-        puzzle,
-        timeLimitSeconds: puzzle.timeLimitSeconds,
-      } as MatchFoundEvent);
+    const matchPayload2 = {
+      roomId,
+      opponentName: player1Name,
+      opponentElo: p1.elo,
+      puzzle: this.formatPuzzle(problem),
+      timeLimitSeconds: Math.floor(problem.timeLimitMs / 1000),
+      myHp: INITIAL_HP,
+      opponentHp: INITIAL_HP,
+    };
+
+    if (socket1) {
+      socket1.join(roomId);
+      socket1.emit('match:found', matchPayload1);
+    }
+    if (socket2) {
+      socket2.join(roomId);
+      socket2.emit('match:found', matchPayload2);
     }
 
-    if (player2Socket) {
-      player2Socket.join(roomId);
-      player2Socket.emit('match:found', {
-        roomId,
-        opponentName: player1Name,
-        puzzle,
-        timeLimitSeconds: puzzle.timeLimitSeconds,
-      } as MatchFoundEvent);
-    }
+    console.log(`[Match] ${player1Name} (${p1.elo}) vs ${player2Name} (${p2.elo}) → room ${roomId}`);
 
-    console.log(`Match found: ${player1Name} vs ${player2Name} in room ${roomId}`);
-  }
+    // Auto-start countdown after 1s (both players get the match:found event)
+    setTimeout(async () => {
+      battleState.status = 'COUNTDOWN';
+      await this.redis.setEx(`battle:${roomId}`, 7200, JSON.stringify(battleState));
 
-  // Get seeded puzzles (hardcoded for MVP)
-  private async getSeededPuzzles(): Promise<Puzzle[]> {
-    return [
-      {
-        id: 'two-sum',
-        title: 'Two Sum',
-        description: 'Given an array of integers and a target, return indices of two numbers that add up to the target.',
-        difficulty: 1,
-        examples: [
-          { input: '[2,7,11,15], 9', output: '[0,1]' },
-          { input: '[3,2,4], 6', output: '[1,2]' }
-        ],
-        testCases: [
-          { input: '[2,7,11,15], 9', expectedOutput: '[0,1]', isHidden: false },
-          { input: '[3,2,4], 6', expectedOutput: '[1,2]', isHidden: false },
-          { input: '[3,3], 6', expectedOutput: '[0,1]', isHidden: true },
-          { input: '[1,2,3,4,5], 9', expectedOutput: '[3,4]', isHidden: true },
-          { input: '[-1,-2,-3,-4,-5], -8', expectedOutput: '[2,4]', isHidden: true },
-        ],
-        timeLimitSeconds: 300,
-        p50RuntimeMs: 1000,
-      },
-      {
-        id: 'palindrome',
-        title: 'Valid Palindrome',
-        description: 'Given a string, determine if it is a palindrome, considering only alphanumeric characters.',
-        difficulty: 1,
-        examples: [
-          { input: '"A man, a plan, a canal: Panama"', output: 'true' },
-          { input: '"race a car"', output: 'false' }
-        ],
-        testCases: [
-          { input: '"A man, a plan, a canal: Panama"', expectedOutput: 'true', isHidden: false },
-          { input: '"race a car"', expectedOutput: 'false', isHidden: false },
-          { input: '""', expectedOutput: 'true', isHidden: true },
-          { input: '" "', expectedOutput: 'true', isHidden: true },
-          { input: '"0P"', expectedOutput: 'false', isHidden: true },
-        ],
-        timeLimitSeconds: 180,
-        p50RuntimeMs: 500,
-      },
-      {
-        id: 'fizzbuzz',
-        title: 'FizzBuzz',
-        description: 'Return an array with numbers 1 to n, but for multiples of 3 return "Fizz", for multiples of 5 return "Buzz", and for multiples of both return "FizzBuzz".',
-        difficulty: 1,
-        examples: [
-          { input: '3', output: '["1","2","Fizz"]' },
-          { input: '5', output: '["1","2","Fizz","4","Buzz"]' }
-        ],
-        testCases: [
-          { input: '3', expectedOutput: '["1","2","Fizz"]', isHidden: false },
-          { input: '5', expectedOutput: '["1","2","Fizz","4","Buzz"]', isHidden: false },
-          { input: '15', expectedOutput: '["1","2","Fizz","4","Buzz","Fizz","7","8","Fizz","Buzz","11","Fizz","13","14","FizzBuzz"]', isHidden: true },
-          { input: '1', expectedOutput: '["1"]', isHidden: true },
-          { input: '0', expectedOutput: '[]', isHidden: true },
-        ],
-        timeLimitSeconds: 120,
-        p50RuntimeMs: 300,
-      },
-      {
-        id: 'fibonacci',
-        title: 'Fibonacci Number',
-        description: 'Return the nth Fibonacci number.',
-        difficulty: 2,
-        examples: [
-          { input: '2', output: '1' },
-          { input: '3', output: '2' }
-        ],
-        testCases: [
-          { input: '2', expectedOutput: '1', isHidden: false },
-          { input: '3', expectedOutput: '2', isHidden: false },
-          { input: '10', expectedOutput: '55', isHidden: true },
-          { input: '0', expectedOutput: '0', isHidden: true },
-          { input: '20', expectedOutput: '6765', isHidden: true },
-        ],
-        timeLimitSeconds: 240,
-        p50RuntimeMs: 800,
-      },
-      {
-        id: 'valid-parentheses',
-        title: 'Valid Parentheses',
-        description: 'Given a string containing just the characters \'(\', \')\', \'{\', \'}\', \'[\' and \']\', determine if the input string is valid.',
-        difficulty: 2,
-        examples: [
-          { input: '"()"', output: 'true' },
-          { input: '"()[]{}"', output: 'true' }
-        ],
-        testCases: [
-          { input: '"()"', expectedOutput: 'true', isHidden: false },
-          { input: '"()[]{}"', expectedOutput: 'true', isHidden: false },
-          { input: '"(]"', expectedOutput: 'false', isHidden: true },
-          { input: '"([)]"', expectedOutput: 'false', isHidden: true },
-          { input: '"{[]}"', expectedOutput: 'true', isHidden: true },
-        ],
-        timeLimitSeconds: 180,
-        p50RuntimeMs: 600,
+      for (let i = 3; i >= 1; i--) {
+        setTimeout(() => {
+          this.io.to(roomId).emit('battle:countdown', { secondsLeft: i });
+        }, (3 - i) * 1000);
       }
-    ];
+
+      setTimeout(async () => {
+        await this.startBattle(roomId, battleState, problem);
+      }, 3000);
+    }, 1000);
   }
 
-  // Mock user name lookup (MVP)
-  private async getUserName(userId: string): Promise<string> {
-    // TODO: Fetch from database
-    return `User${userId.substr(0, 4)}`;
+  private async startBattle(roomId: string, state: BattleState, problem: any): Promise<void> {
+    state.status = 'ACTIVE';
+    state.startTimestamp = Date.now();
+    await this.redis.setEx(`battle:${roomId}`, 7200, JSON.stringify(state));
+
+    this.io.to(roomId).emit('battle:start', {
+      puzzle: this.formatPuzzle(problem),
+      timeLimitSeconds: Math.floor(problem.timeLimitMs / 1000),
+    });
+
+    const timeLimitSec = Math.floor(problem.timeLimitMs / 1000);
+
+    // 60s warning
+    if (timeLimitSec > 60) {
+      setTimeout(() => {
+        this.io.to(roomId).emit('battle:time_warning', { secondsLeft: 60 });
+      }, (timeLimitSec - 60) * 1000);
+    }
+
+    // Battle timeout
+    setTimeout(async () => {
+      const currentState = await this.getBattleState(roomId);
+      if (currentState && currentState.status === 'ACTIVE') {
+        // Time's up — winner is whoever has more HP
+        currentState.status = 'ENDED';
+        await this.redis.setEx(`battle:${roomId}`, 7200, JSON.stringify(currentState));
+
+        const winnerId = currentState.hp1 >= currentState.hp2
+          ? currentState.player1Id
+          : currentState.player2Id;
+
+        this.io.to(roomId).emit('battle:timeout', {
+          winnerId,
+          hp1: currentState.hp1,
+          hp2: currentState.hp2,
+        });
+      }
+    }, timeLimitSec * 1000);
   }
 
-  // Get user socket by ID
-  private async getUserSocket(userId: string): Promise<Socket | null> {
-    // TODO: Maintain socket-to-user mapping
-    // For MVP, we'll return null (socket lookup will be handled in main socket handler)
-    return null;
+  /** Select problem based on average ELO */
+  private async selectProblemForElo(avgElo: number): Promise<any | null> {
+    let difficulty = 'easy';
+    if (avgElo >= 1400) difficulty = 'hard';
+    else if (avgElo >= 1200) difficulty = 'medium';
+
+    try {
+      const problems = await ProblemService.getProblemsByDifficulty(difficulty);
+      if (problems.length === 0) {
+        return ProblemService.getRandomProblem();
+      }
+      return problems[Math.floor(Math.random() * problems.length)];
+    } catch {
+      return ProblemService.getRandomProblem();
+    }
+  }
+
+  private formatPuzzle(problem: any) {
+    return {
+      id: problem.id,
+      title: problem.title,
+      description: problem.description,
+      difficulty: problem.difficulty,
+      examples: problem.examples || [],
+      testCases: (problem.testCases || []).filter((tc: any) => !tc.isHidden),
+      timeLimitSeconds: Math.floor(problem.timeLimitMs / 1000),
+      p50RuntimeMs: problem.p50RuntimeMs || 1000,
+      tags: problem.tags || [],
+    };
+  }
+
+  private async createMatchRecord(p1Id: string, p2Id: string, problemId: string) {
+    const { prisma } = await import('../lib/prisma');
+    return prisma.match.create({
+      data: { player1Id: p1Id, player2Id: p2Id, problemId, status: 'waiting' },
+    });
+  }
+
+  private async getBattleState(roomId: string): Promise<BattleState | null> {
+    const raw = await this.redis.get(`battle:${roomId}`);
+    return raw ? JSON.parse(raw) : null;
   }
 }

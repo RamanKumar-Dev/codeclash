@@ -1,182 +1,182 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import { useAuthStore } from '../stores/authStore';
+import { useBattleStore } from '../stores/battleStore';
+
+const SERVER_URL = 'http://localhost:3001';
+
+function getEloTier(elo: number) {
+  if (elo >= 2000) return { label: 'Diamond', cls: 'tier-diamond', icon: '💎' };
+  if (elo >= 1700) return { label: 'Platinum', cls: 'tier-platinum', icon: '🔷' };
+  if (elo >= 1400) return { label: 'Gold', cls: 'tier-gold', icon: '🥇' };
+  if (elo >= 1200) return { label: 'Silver', cls: 'tier-silver', icon: '🥈' };
+  return { label: 'Bronze', cls: 'tier-bronze', icon: '🥉' };
+}
 
 export const LobbyPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, token } = useAuthStore();
+  const { setBattle, setTimeRemaining } = useBattleStore();
   const [isInQueue, setIsInQueue] = useState(false);
-  const [queueSize, setQueueSize] = useState(0);
+  const [queuePosition, setQueuePosition] = useState<{ position: number; total: number; waitSeconds: number } | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [waitTime, setWaitTime] = useState(0);
+  const waitInterval = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!token) {
-      navigate('/login');
-      return;
-    }
+    if (!token) { navigate('/login'); return; }
 
-    // Connect to Socket.io
-    const newSocket = io('http://localhost:3001');
+    const newSocket = io(SERVER_URL);
     setSocket(newSocket);
-
-    // Authenticate
     newSocket.emit('authenticate', { token });
 
-    // Socket event handlers
-    newSocket.on('authenticated', (data) => {
-      console.log('Authenticated as:', data);
-    });
+    newSocket.on('authenticated', () => console.log('Lobby authenticated'));
 
-    newSocket.on('queue:joined', (data) => {
-      setQueueSize(data.queueSize);
+    newSocket.on('queue:joined', () => {
       setIsInQueue(true);
+      setWaitTime(0);
+      waitInterval.current = window.setInterval(() => setWaitTime(t => t + 1), 1000);
     });
 
-    newSocket.on('match:found', (data) => {
+    newSocket.on('queue:position', (data: any) => setQueuePosition(data));
+
+    newSocket.on('match:found', (data: any) => {
+      setBattle(data.roomId, data.puzzle, data.opponentName);
+      setTimeRemaining(data.timeLimitSeconds || 300);
+      clearInterval(waitInterval.current!);
       navigate(`/battle/${data.roomId}`);
     });
 
-    newSocket.on('error', (error) => {
-      console.error('Socket error:', error);
-    });
+    newSocket.on('error', console.error);
 
     return () => {
       newSocket.close();
+      clearInterval(waitInterval.current!);
     };
-  }, [token, navigate]);
+  }, [token]);
 
   const handleJoinQueue = () => {
     if (!socket || !user) return;
-    
-    socket.emit('queue:join', { userId: user.id });
+    socket.emit('queue:join', { userId: user.id, elo: user.elo });
   };
 
   const handleLeaveQueue = () => {
     if (!socket) return;
-    
     socket.emit('queue:leave');
     setIsInQueue(false);
-    setQueueSize(0);
+    setQueuePosition(null);
+    setWaitTime(0);
+    clearInterval(waitInterval.current!);
   };
 
-  const handleLogout = () => {
-    const { logout } = useAuthStore.getState();
-    logout();
-    navigate('/login');
-  };
+  const tier = user ? getEloTier(user.elo || 1000) : null;
+  const winRate = user && (user.wins + user.losses) > 0
+    ? ((user.wins / (user.wins + user.losses)) * 100).toFixed(1)
+    : '0.0';
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* Header */}
-      <div className="bg-gray-800 border-b border-gray-700 p-4">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <div className="flex items-center space-x-4">
-            <h1 className="text-2xl font-bold text-green-400">Code-Clash</h1>
-            <span className="text-gray-400">Arena of Algorithms</span>
-          </div>
-          <div className="flex items-center space-x-4">
-            <div className="text-right">
-              <div className="font-semibold">{user?.username}</div>
-              <div className="text-sm text-gray-400">ELO: {user?.elo}</div>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="bg-red-500 hover:bg-red-600 px-4 py-2 rounded transition duration-200"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </div>
+    <div className="scanlines" style={{ minHeight: '100vh', paddingTop: 80, position: 'relative' }}>
+      <div className="bg-grid" />
+      <div className="bg-gradient-orbs" />
 
-      {/* Main Content */}
-      <div className="max-w-4xl mx-auto p-8">
-        <div className="text-center mb-12">
-          <h2 className="text-4xl font-bold mb-4">
-            Welcome to the Arena, <span className="text-green-400">{user?.username}</span>!
-          </h2>
-          <p className="text-xl text-gray-400">
-            Ready to test your coding skills against real opponents?
+      <div className="z-above" style={{ maxWidth: 900, margin: '0 auto', padding: '40px 24px' }}>
+
+        {/* Header */}
+        <div style={{ textAlign: 'center', marginBottom: 48 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 8 }}>
+            <h1 style={{ fontSize: '2.2rem', fontWeight: 800 }}>
+              Welcome, <span className="text-glow-cyan">{user?.username}</span>
+            </h1>
+            {tier && <span className={`tier-badge ${tier.cls}`}>{tier.icon} {tier.label}</span>}
+          </div>
+          <p style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>
+            Your ELO: <span style={{ color: 'var(--cyan)', fontFamily: 'var(--font-code)', fontWeight: 700 }}>{user?.elo || 1000}</span>
           </p>
         </div>
 
-        {/* Queue Status */}
-        <div className="bg-gray-800 rounded-lg p-8 mb-8">
-          <div className="text-center">
-            {isInQueue ? (
-              <div>
-                <div className="text-2xl font-bold text-yellow-400 mb-4">
+        {/* Stats Row */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 40 }}>
+          {[
+            { label: 'Wins',     value: user?.wins || 0,    color: 'var(--green)' },
+            { label: 'Losses',   value: user?.losses || 0,  color: 'var(--red)' },
+            { label: 'Win Rate', value: `${winRate}%`,      color: 'var(--gold)' },
+            { label: 'ELO',      value: user?.elo || 1000,  color: 'var(--cyan)' },
+          ].map(stat => (
+            <div key={stat.label} className="card-glow" style={{ padding: '20px 16px', textAlign: 'center' }}>
+              <div style={{ fontSize: '1.8rem', fontWeight: 800, color: stat.color, fontFamily: 'var(--font-code)' }}>
+                {stat.value}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 4, textTransform: 'uppercase', letterSpacing: '1px' }}>
+                {stat.label}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Matchmaking Box */}
+        <div className="card-glow" style={{ padding: 48, textAlign: 'center', marginBottom: 40 }}>
+          {isInQueue ? (
+            <div>
+              <div style={{ marginBottom: 24 }}>
+                <div className="spinner" style={{ margin: '0 auto 16px' }} />
+                <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--gold)', marginBottom: 8 }}>
                   Finding Opponent...
+                </h2>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontFamily: 'var(--font-code)' }}>
+                  Wait time: <span style={{ color: 'var(--cyan)' }}>{Math.floor(waitTime / 60)}:{String(waitTime % 60).padStart(2, '0')}</span>
                 </div>
-                <div className="text-gray-300 mb-6">
-                  Players in queue: {queueSize}
-                </div>
-                <div className="flex justify-center">
-                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-400"></div>
-                </div>
-                <button
-                  onClick={handleLeaveQueue}
-                  className="mt-6 bg-red-500 hover:bg-red-600 px-6 py-3 rounded-lg transition duration-200"
-                >
-                  Cancel Search
-                </button>
+                {queuePosition && (
+                  <div style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    Position #<span style={{ color: 'var(--gold)' }}>{queuePosition.position}</span> of {queuePosition.total} in queue
+                  </div>
+                )}
               </div>
-            ) : (
-              <div>
-                <div className="text-2xl font-bold mb-4">
-                  Ready to Battle?
-                </div>
-                <div className="text-gray-300 mb-6">
-                  Join the queue to be matched with an opponent
-                </div>
-                <button
-                  onClick={handleJoinQueue}
-                  className="bg-green-500 hover:bg-green-600 text-white font-bold py-4 px-8 rounded-lg text-xl transition duration-200 transform hover:scale-105"
-                >
-                  Find Match
-                </button>
-              </div>
-            )}
-          </div>
+              <button id="cancel-queue-btn" onClick={handleLeaveQueue} className="btn btn-red btn-lg">
+                Cancel Search
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: '3rem', marginBottom: 12 }}>⚔️</div>
+              <h2 style={{ fontSize: '1.6rem', fontWeight: 800, marginBottom: 8 }}>
+                Ready to Battle?
+              </h2>
+              <p style={{ color: 'var(--text-muted)', marginBottom: 32, maxWidth: 400, margin: '0 auto 32px' }}>
+                Challenge real opponents in real-time coding duels. Solve problems faster to deal damage and win ELO.
+              </p>
+              <button
+                id="find-match-btn"
+                onClick={handleJoinQueue}
+                className="btn btn-cyan btn-lg btn-pulse"
+                style={{ fontSize: '1.1rem', padding: '16px 48px' }}
+              >
+                ⚡ Find Match
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Quick Stats */}
-        <div className="grid grid-cols-3 gap-6">
-          <div className="bg-gray-800 rounded-lg p-6 text-center">
-            <div className="text-3xl font-bold text-green-400 mb-2">{user?.wins || 0}</div>
-            <div className="text-gray-400">Wins</div>
-          </div>
-          <div className="bg-gray-800 rounded-lg p-6 text-center">
-            <div className="text-3xl font-bold text-red-400 mb-2">{user?.losses || 0}</div>
-            <div className="text-gray-400">Losses</div>
-          </div>
-          <div className="bg-gray-800 rounded-lg p-6 text-center">
-            <div className="text-3xl font-bold text-blue-400 mb-2">{user?.elo || 1000}</div>
-            <div className="text-gray-400">ELO Rating</div>
-          </div>
-        </div>
-
-        {/* How to Play */}
-        <div className="bg-gray-800 rounded-lg p-6 mt-8">
-          <h3 className="text-xl font-bold mb-4 text-green-400">How to Play</h3>
-          <div className="grid grid-cols-2 gap-4 text-gray-300">
-            <div>
-              <h4 className="font-semibold mb-2">⚔️ Battle</h4>
-              <p className="text-sm">Solve coding puzzles faster than your opponent to deal damage</p>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-2">💥 Damage</h4>
-              <p className="text-sm">Correct solutions deal damage based on speed and efficiency</p>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-2">🏆 Victory</h4>
-              <p className="text-sm">Reduce opponent's HP to 0 to win and gain ELO</p>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-2">📈 Progress</h4>
-              <p className="text-sm">Climb the leaderboard and prove you're the best coder</p>
-            </div>
+        {/* How it works */}
+        <div className="card-glow" style={{ padding: 28 }}>
+          <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--cyan)', marginBottom: 20, textTransform: 'uppercase', letterSpacing: '1px' }}>
+            How It Works
+          </h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+            {[
+              { icon: '🔍', title: 'Smart Matchmaking', desc: 'Paired with opponents near your ELO rating for fair battles' },
+              { icon: '💥', title: 'Deal Damage', desc: 'Correct solutions deal 40–120 HP. Speed and efficiency matter' },
+              { icon: '🪄', title: 'Cast Spells', desc: 'Use mana to Freeze opponents, reveal Hints, or Slow their editor' },
+              { icon: '📈', title: 'Gain ELO', desc: 'Win battles to climb from Bronze → Silver → Gold → Platinum → Diamond' },
+            ].map(item => (
+              <div key={item.title} style={{ display: 'flex', gap: 12, padding: 12, background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-md)' }}>
+                <span style={{ fontSize: '1.4rem' }}>{item.icon}</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: 4 }}>{item.title}</div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{item.desc}</div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>

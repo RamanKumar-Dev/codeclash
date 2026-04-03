@@ -1,135 +1,63 @@
 import { prisma } from '../lib/prisma';
 
+const PROBLEM_SELECT = {
+  id: true, title: true, description: true,
+  difficulty: true, timeLimitMs: true, memoryLimitMb: true,
+  p50RuntimeMs: true, tags: true, examples: true,
+  testCases: true, createdAt: true,
+};
+
+function parseProblem(p: any) {
+  if (!p) return p;
+  return {
+    ...p,
+    tags: typeof p.tags === 'string' ? JSON.parse(p.tags) : (p.tags || []),
+    examples: typeof p.examples === 'string' ? JSON.parse(p.examples) : (p.examples || []),
+    testCases: typeof p.testCases === 'string' ? JSON.parse(p.testCases) : (p.testCases || []),
+  };
+}
+
 export class ProblemService {
-  // Get all problems
   static async getAllProblems() {
-    return prisma.problem.findMany({
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        difficulty: true,
-        timeLimitMs: true,
-        memoryLimitMb: true,
-        tags: true,
-        createdAt: true,
-      }
+    const ps = await prisma.problem.findMany({
+      select: { ...PROBLEM_SELECT, testCases: false },
+      orderBy: [{ difficulty: 'asc' }, { title: 'asc' }],
     });
+    return ps.map(parseProblem);
   }
 
-  // Get problem by ID
-  static async getProblemById(problemId: string) {
-    return prisma.problem.findUnique({
-      where: { id: problemId },
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        difficulty: true,
-        timeLimitMs: true,
-        memoryLimitMb: true,
-        tags: true,
-        createdAt: true,
-      }
-    });
+  static async getProblemById(id: string) {
+    return parseProblem(await prisma.problem.findUnique({ where: { id }, select: PROBLEM_SELECT }));
   }
 
-  // Get random problem
   static async getRandomProblem() {
-    const problems = await prisma.problem.findMany({
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        difficulty: true,
-        timeLimitMs: true,
-        memoryLimitMb: true,
-        tags: true,
-      }
-    });
-
-    if (problems.length === 0) {
-      return null;
-    }
-
-    const randomIndex = Math.floor(Math.random() * problems.length);
-    return problems[randomIndex];
+    const problems = await prisma.problem.findMany({ select: PROBLEM_SELECT });
+    if (!problems.length) return null;
+    return parseProblem(problems[Math.floor(Math.random() * problems.length)]);
   }
 
-  // Create problem
-  static async createProblem(problemData: {
-    title: string;
-    description: string;
-    difficulty: string;
-    timeLimitMs: number;
-    memoryLimitMb: number;
-    tags: string[];
-  }) {
-    return prisma.problem.create({
-      data: problemData,
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        difficulty: true,
-        timeLimitMs: true,
-        memoryLimitMb: true,
-        tags: true,
-        createdAt: true,
-      }
-    });
-  }
-
-  // Get problems by difficulty
   static async getProblemsByDifficulty(difficulty: string) {
-    return prisma.problem.findMany({
+    const ps = await prisma.problem.findMany({
       where: { difficulty },
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        difficulty: true,
-        timeLimitMs: true,
-        memoryLimitMb: true,
-        tags: true,
-        createdAt: true,
-      }
+      select: PROBLEM_SELECT,
     });
+    return ps.map(parseProblem);
   }
 
-  // Update problem
-  static async updateProblem(problemId: string, updateData: Partial<{
-    title: string;
-    description: string;
-    difficulty: string;
-    timeLimitMs: number;
-    memoryLimitMb: number;
-    tags: string[];
-  }>) {
-    return prisma.problem.update({
-      where: { id: problemId },
-      data: updateData,
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        difficulty: true,
-        timeLimitMs: true,
-        memoryLimitMb: true,
-        tags: true,
-        updatedAt: true,
-      }
+  static async createProblem(data: {
+    title: string; description: string; difficulty: string;
+    timeLimitMs: number; memoryLimitMb: number; p50RuntimeMs?: number;
+    tags: any; examples: any; testCases: any;
+  }) {
+    const row = await prisma.problem.create({
+      data: {
+        ...data,
+        tags: JSON.stringify(data.tags),
+        examples: JSON.stringify(data.examples),
+        testCases: JSON.stringify(data.testCases),
+      } as any,
+      select: PROBLEM_SELECT,
     });
-  }
-
-  // Delete problem
-  static async deleteProblem(problemId: string) {
-    return prisma.problem.delete({
-      where: { id: problemId },
-      select: {
-        id: true,
-        title: true,
-      }
-    });
+    return parseProblem(row);
   }
 }

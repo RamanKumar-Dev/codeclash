@@ -1,11 +1,11 @@
-// This is Prisma's schema file, generated from the existing SQL schema
+// This is Prisma's schema file
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider = "sqlite"
+  url      = "file:./dev.db"
 }
 
 model User {
@@ -16,18 +16,22 @@ model User {
   elo               Int      @default(1000)
   wins              Int      @default(0)
   losses            Int      @default(0)
-  hp                Int      @default(500)  // Changed from 100 to 500
-  maxHp             Int      @default(500)  // Changed from 100 to 500
+  winStreak         Int      @default(0) @map("win_streak")
+  spellsCast        Int      @default(0) @map("spells_cast")
+  hp                Int      @default(500)
+  maxHp             Int      @default(500) @map("max_hp")
+  avatar            String?
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   // Relations
-  matchesAsPlayer1  Match[]  @relation("Player1Matches")
-  matchesAsPlayer2  Match[]  @relation("Player2Matches")
-  matchesWon        Match[]  @relation("WinnerMatches")
+  matchesAsPlayer1  Match[]          @relation("Player1Matches")
+  matchesAsPlayer2  Match[]          @relation("Player2Matches")
+  matchesWon        Match[]          @relation("WinnerMatches")
   submissions       Submission[]
   battleSpells      BattleSpell[]
   battleDamage      BattleDamage[]
+  achievements      UserAchievement[]
 
   @@map("users")
 }
@@ -37,11 +41,12 @@ model Problem {
   title         String
   description   String
   difficulty    String   // 'easy' | 'medium' | 'hard'
-  testCases     Json     @default("[]") @map("test_cases") // [{ input, expectedOutput, isHidden }]
+  testCases     String   @default("[]") @map("test_cases")
   timeLimitMs   Int      @map("time_limit_ms")
   memoryLimitMb Int      @map("memory_limit_mb")
-  tags          String[]  // JSON array of tags
-  examples      Json     // JSON array of {input, output}
+  p50RuntimeMs  Int      @default(1000) @map("p50_runtime_ms")
+  tags          String   @default("[]")
+  examples      String   @default("[]")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
@@ -57,7 +62,7 @@ model Match {
   player1Id    String    @map("player1_id")
   player2Id    String    @map("player2_id")
   problemId    String    @map("problem_id")
-  status       String    @default("waiting") // 'waiting' | 'active' | 'completed'
+  status       String    @default("waiting")
   winnerId     String?   @map("winner_id")
   startedAt    DateTime? @map("started_at")
   endedAt      DateTime? @map("ended_at")
@@ -90,7 +95,6 @@ model Submission {
   damageDealt  Int      @map("damage_dealt")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  // Relations
   match        Match   @relation(fields: [matchId], references: [id])
   user         User    @relation(fields: [userId], references: [id])
   problem      Problem @relation(fields: [problemId], references: [id])
@@ -103,12 +107,11 @@ model BattleSpell {
   matchId     String   @map("match_id")
   casterId    String   @map("caster_id")
   targetId    String?  @map("target_id")
-  spellType   String   @map("spell_type") // 'hint' | 'time_freeze' | 'slow'
+  spellType   String   @map("spell_type")
   damage      Int?
-  duration    Int?     // for time-based effects
+  duration    Int?
   createdAt   DateTime @default(now()) @map("created_at")
 
-  // Relations
   match       Match @relation(fields: [matchId], references: [id])
   caster      User  @relation(fields: [casterId], references: [id])
 
@@ -121,12 +124,25 @@ model BattleDamage {
   attackerId   String   @map("attacker_id")
   targetId     String   @map("target_id")
   damage       Int
-  damageType   String   @map("damage_type") // 'puzzle' | 'spell'
+  damageType   String   @map("damage_type")
   timestamp    DateTime @default(now()) @map("timestamp")
 
-  // Relations
   match        Match @relation(fields: [matchId], references: [id])
   attacker     User  @relation(fields: [attackerId], references: [id])
 
   @@map("battle_damage")
+}
+
+model UserAchievement {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  achievementId   String   @map("achievement_id")
+  achievementName String   @map("achievement_name")
+  achievementIcon String   @map("achievement_icon")
+  earnedAt        DateTime @default(now()) @map("earned_at")
+
+  user            User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, achievementId])
+  @@map("user_achievements")
 }

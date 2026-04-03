@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 
 export const RegisterPage: React.FC = () => {
@@ -15,117 +15,70 @@ export const RegisterPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (password !== confirmPassword) { setError('Passwords do not match'); return; }
+    if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
     setIsLoading(true);
-
-    if (password !== confirmPassword) {
-      setError('Passwords do not match');
-      setIsLoading(false);
-      return;
-    }
-
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
-      setIsLoading(false);
-      return;
-    }
-
     try {
       await register(username, email, password);
       navigate('/lobby');
-    } catch (err) {
-      setError('Registration failed. Please try again.');
+    } catch {
+      setError('Registration failed. Username or email may already be taken.');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const field = (label: string, id: string, type: string, value: string, onChange: (v: string) => void, placeholder: string) => (
+    <div style={{ marginBottom: 16 }}>
+      <label htmlFor={id} style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        {label}
+      </label>
+      <input id={id} type={type} value={value} onChange={e => onChange(e.target.value)} className="input" placeholder={placeholder} required />
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center px-4">
-      <div className="max-w-md w-full bg-gray-800 rounded-lg shadow-xl p-8">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-green-400 mb-2">Code-Clash</h1>
-          <p className="text-gray-400">Arena of Algorithms</p>
-          <p className="text-sm text-gray-500 mt-2">Create your account</p>
+    <div className="scanlines" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+      <div className="bg-grid" />
+      <div className="bg-gradient-orbs" />
+
+      <div className="z-above" style={{ width: '100%', maxWidth: 440, padding: '0 20px' }}>
+        <div style={{ textAlign: 'center', marginBottom: 36 }}>
+          <div className="logo-text" style={{ fontSize: '2.4rem', fontWeight: 900, letterSpacing: '-1px' }}>
+            <span>Code</span><span>Clash</span>
+          </div>
+          <div style={{ color: 'var(--text-muted)', marginTop: 8, fontSize: '0.85rem', letterSpacing: '2px', textTransform: 'uppercase' }}>
+            Join the Arena
+          </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              Username
-            </label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-green-400 focus:ring-2 focus:ring-green-400 focus:ring-opacity-50"
-              placeholder="Choose a username"
-              required
-            />
-          </div>
+        <div className="card-glow" style={{ padding: 36 }}>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: 4 }}>Create account</h1>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: 24 }}>
+            Start at ELO 1000 and climb the ranks
+          </p>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              Email
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-green-400 focus:ring-2 focus:ring-green-400 focus:ring-opacity-50"
-              placeholder="Enter your email"
-              required
-            />
-          </div>
+          <form onSubmit={handleSubmit}>
+            {field('Username', 'username', 'text', username, setUsername, 'Your in-game name')}
+            {field('Email', 'reg-email', 'email', email, setEmail, 'you@example.com')}
+            {field('Password', 'reg-password', 'password', password, setPassword, '6+ characters')}
+            {field('Confirm Password', 'confirm-password', 'password', confirmPassword, setConfirmPassword, 'Repeat password')}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              Password
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-green-400 focus:ring-2 focus:ring-green-400 focus:ring-opacity-50"
-              placeholder="Create a password"
-              required
-            />
-          </div>
+            {error && (
+              <div style={{ padding: '10px 14px', background: 'rgba(255,48,96,0.1)', border: '1px solid rgba(255,48,96,0.3)', borderRadius: 'var(--radius-md)', color: 'var(--red)', fontSize: '0.85rem', marginBottom: 16 }}>
+                ⚠️ {error}
+              </div>
+            )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              Confirm Password
-            </label>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-green-400 focus:ring-2 focus:ring-green-400 focus:ring-opacity-50"
-              placeholder="Confirm your password"
-              required
-            />
-          </div>
+            <button id="register-btn" type="submit" disabled={isLoading} className="btn btn-cyan btn-lg" style={{ width: '100%' }}>
+              {isLoading ? 'Creating account...' : 'Join the Arena →'}
+            </button>
+          </form>
 
-          {error && (
-            <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded-lg">
-              {error}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isLoading ? 'Creating account...' : 'Sign Up'}
-          </button>
-        </form>
-
-        <div className="mt-6 text-center">
-          <p className="text-gray-400">
-            Already have an account?{' '}
-            <a href="/login" className="text-green-400 hover:text-green-300">
-              Sign in
-            </a>
+          <div className="neon-divider" style={{ margin: '24px 0' }} />
+          <p style={{ textAlign: 'center', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+            Already a coder?{' '}
+            <Link to="/login" style={{ color: 'var(--cyan)', textDecoration: 'none', fontWeight: 600 }}>Sign in</Link>
           </p>
         </div>
       </div>

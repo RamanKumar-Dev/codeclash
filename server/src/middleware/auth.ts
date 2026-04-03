@@ -16,6 +16,7 @@ interface JWTPayload {
   userId: string;
   username: string;
   email: string;
+  elo?: number;
 }
 
 export class AuthMiddleware {
@@ -32,11 +33,12 @@ export class AuthMiddleware {
   });
 
   // Generate JWT token
-  static generateToken(user: { id: string; username: string; email: string }): string {
+  static generateToken(user: { id: string; username: string; email: string; elo?: number }): string {
     const payload = {
       userId: user.id,
       username: user.username,
       email: user.email,
+      elo: (user as any).elo || 1000,
     };
 
     return jwt.sign(payload, this.JWT_SECRET as string, { expiresIn: this.JWT_EXPIRES_IN });
