@@ -97,4 +97,5 @@ export interface Judge0Result {
   finished_at?: string;
   time?: string;
   memory?: number;
+  expected_output?: string; // Added for compatibility
 }

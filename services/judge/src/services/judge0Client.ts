@@ -5,6 +5,9 @@ import { JUDGE0_CONFIG, getLanguageId, getExecutionLimits, isSuccessfulExecution
 export class Judge0Client {
   private client: AxiosInstance;
   private baseUrl: string;
+  private isHealthy: boolean = true;
+  private lastHealthCheck: number = 0;
+  private healthCheckInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     this.baseUrl = JUDGE0_CONFIG.API_URL;
@@ -15,6 +18,9 @@ export class Judge0Client {
         'Content-Type': 'application/json',
       },
     });
+    
+    // Start periodic health checks
+    this.startHealthChecks();
   }
 
   async submitCode(
@@ -23,6 +29,11 @@ export class Judge0Client {
     stdin?: string,
     expectedOutput?: string
   ): Promise<Judge0Result> {
+    // Check Judge0 health before submission
+    if (!await this.checkHealth()) {
+      throw new Error('Judge0 service is currently unavailable. Please try again.');
+    }
+
     const languageId = getLanguageId(language);
     const limits = getExecutionLimits(language);
 
@@ -44,11 +55,19 @@ export class Judge0Client {
       const response = await this.client.post('/submissions', submission);
       const token = response.data.token;
 
-      // Poll for result
-      return await this.pollForResult(token);
+      // Poll for result with timeout wrapper
+      return await this.pollForResultWithTimeout(token);
     } catch (error) {
       console.error('Error submitting code to Judge0:', error);
-      throw new Error('Failed to submit code to Judge0');
+      
+      // Mark as unhealthy on error
+      this.isHealthy = false;
+      
+      if (axios.isAxiosError(error) && error.code === 'ECONNABORTED') {
+        throw new Error('Judge0 service timed out. Please try again.');
+      }
+      
+      throw new Error('Failed to submit code to Judge0. Please try again.');
     }
   }
 
@@ -100,11 +119,17 @@ export class Judge0Client {
     return results;
   }
 
-  private async pollForResult(token: string): Promise<Judge0Result> {
+  private async pollForResultWithTimeout(token: string): Promise<Judge0Result> {
     let attempts = 0;
     const maxAttempts = JUDGE0_CONFIG.MAX_POLL_ATTEMPTS;
+    const startTime = Date.now();
 
     while (attempts < maxAttempts) {
+      // Check if we've exceeded the overall timeout
+      if (Date.now() - startTime > JUDGE0_CONFIG.TIMEOUT_MS) {
+        throw new Error('Judge0 submission timeout. Please try again.');
+      }
+
       try {
         const response = await this.client.get(`/submissions/${token}`);
         const result = response.data;
@@ -169,11 +194,46 @@ export class Judge0Client {
   }
 
   async healthCheck(): Promise<boolean> {
+    return await this.checkHealth();
+  }
+
+  private async checkHealth(): Promise<boolean> {
     try {
-      await this.getSystemInfo();
+      const response = await this.client.get('/system', {
+        timeout: 3000 // 3 second timeout for health check
+      });
+      
+      this.isHealthy = true;
+      this.lastHealthCheck = Date.now();
       return true;
     } catch (error) {
+      console.error('[Judge0] Health check failed:', error);
+      this.isHealthy = false;
       return false;
     }
+  }
+
+  private startHealthChecks(): void {
+    // Check health immediately
+    this.checkHealth();
+    
+    // Then check periodically
+    this.healthCheckInterval = setInterval(() => {
+      this.checkHealth();
+    }, JUDGE0_CONFIG.HEALTH_CHECK_INTERVAL);
+  }
+
+  stopHealthChecks(): void {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+    }
+  }
+
+  getHealthStatus(): { isHealthy: boolean; lastCheck: number } {
+    return {
+      isHealthy: this.isHealthy,
+      lastCheck: this.lastHealthCheck
+    };
   }
 }

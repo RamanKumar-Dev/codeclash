@@ -23,15 +23,16 @@ export const SUPPORTED_LANGUAGES: Judge0Language[] = [
 export const JUDGE0_CONFIG = {
   BASE_URL: process.env.JUDGE0_URL || 'http://localhost:2358',
   API_URL: process.env.JUDGE0_API_URL || 'http://localhost:2358',
-  TIMEOUT_MS: 10000, // 10 seconds for polling
+  TIMEOUT_MS: 8000, // 8 seconds timeout for all Judge0 calls
   POLL_INTERVAL_MS: 500, // 500ms polling interval
   MAX_POLL_ATTEMPTS: 20,
+  HEALTH_CHECK_INTERVAL: 30000, // 30 seconds between health checks
 };
 
 export const EXECUTION_LIMITS = {
-  CPU_TIME_LIMIT: 5, // 5 seconds per test case (increased for security)
+  CPU_TIME_LIMIT: 2, // 2 seconds per test case (prevents infinite loops)
   MEMORY_LIMIT: 256, // 256MB
-  WALL_TIME_LIMIT: 5, // 5 seconds wall time
+  WALL_TIME_LIMIT: 6, // 6 seconds wall time (3x CPU time)
   MAX_OUTPUT_SIZE: 65536, // 64KB (reduced for security)
 };
 
@@ -83,9 +84,10 @@ export function getExecutionLimits(language: string) {
   // Language-specific limits can be added here
   const limits = { ...EXECUTION_LIMITS };
   
-  // For example, give more time for compiled languages
+  // For compiled languages, give slightly more time but still keep limits strict
   if (['java', 'cpp', 'go'].includes(language.toLowerCase())) {
     limits.CPU_TIME_LIMIT = 3; // 3 seconds for compiled languages
+    limits.WALL_TIME_LIMIT = 9; // 3x CPU time
   }
   
   return limits;

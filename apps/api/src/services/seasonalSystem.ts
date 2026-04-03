@@ -283,11 +283,22 @@ export class SeasonalSystem {
   // Reset seasonal ELO for all users
   private async resetSeasonalElo(): Promise<void> {
     try {
-      await this.prisma.user.updateMany({
-        data: { seasonElo: 1000 }, // Reset to base ELO
+      // Get all users with their current seasonal ELO
+      const users = await this.prisma.user.findMany({
+        select: { id: true, seasonalElo: true }
       });
 
-      console.log('Reset seasonal ELO for all users');
+      // Apply seasonal reset formula: New Season Rating = (Previous Season Rating × 0.7) + 1200
+      for (const user of users) {
+        const newSeasonalElo = Math.round((user.seasonalElo * 0.7) + 1200);
+        
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: { seasonalElo: newSeasonalElo }
+        });
+      }
+
+      console.log(`Reset seasonal ELO for ${users.length} users using formula: (Previous × 0.7) + 1200`);
     } catch (error) {
       console.error('Error resetting seasonal ELO:', error);
     }
