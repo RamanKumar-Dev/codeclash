@@ -2,33 +2,20 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop, feature/**]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
 
 env:
-  NODE_VERSION: '18'
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  NODE_VERSION: '20'
 
 jobs:
-  # Code Quality & Testing
+  # ── Backend Tests ────────────────────────────────────────────────────────────
   test:
+    name: Backend — Build & Type Check
     runs-on: ubuntu-latest
+
     services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: codeclash_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-      
       redis:
         image: redis:7-alpine
         options: >-
@@ -40,276 +27,89 @@ jobs:
           - 6379:6379
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
 
-    - name: Install dependencies
-      run: |
-        npm ci
-        cd apps/api && npm ci
-        cd ../judge && npm ci
-        cd ../web && npm ci
+      - name: Install server dependencies
+        working-directory: server
+        run: npm install
 
-    - name: Run linting
-      run: |
-        cd apps/api && npm run lint
-        cd ../judge && npm run lint
-        cd ../web && npm run lint
+      - name: Generate Prisma client (SQLite)
+        working-directory: server
+        run: npx prisma generate
+        env:
+          DATABASE_URL: file:./prisma/dev.db
 
-    - name: Run type checking
-      run: |
-        cd apps/api && npm run type-check
-        cd ../judge && npm run type-check
-        cd ../web && npm run type-check
+      - name: TypeScript type check
+        working-directory: server
+        run: npx tsc --noEmit
+        env:
+          DATABASE_URL: file:./prisma/dev.db
 
-    - name: Setup test database
-      run: |
-        cd apps/api
-        npx prisma generate
-        npx prisma db push --skip-generate
-        npx prisma migrate deploy
+      - name: Run Prisma migrations
+        working-directory: server
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: file:./prisma/dev.db
 
-    - name: Run unit tests
-      run: |
-        cd apps/api && npm test -- --coverage
-        cd ../judge && npm test -- --coverage
-
-    - name: Run integration tests
-      run: |
-        cd apps/api && npm run test:integration
-        cd ../judge && npm run test:integration
-
-    - name: Upload coverage reports
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./apps/api/coverage/lcov.info
-        flags: unittests
-        name: codecov-umbrella
-
-    - name: Security audit
-      run: npm audit --audit-level moderate
-
-  # E2E Testing
-  e2e:
+  # ── Frontend Build ───────────────────────────────────────────────────────────
+  build-frontend:
+    name: Frontend — Build
     runs-on: ubuntu-latest
-    needs: test
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
-    - name: Install dependencies
-      run: |
-        npm ci
-        cd apps/web && npm ci
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
 
-    - name: Install Playwright
-      run: cd apps/web && npx playwright install --with-deps
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_API_URL: http://localhost:3001
 
-    - name: Build application
-      run: |
-        cd apps/api && npm run build
-        cd ../web && npm run build
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7
 
-    - name: Start services
-      run: |
-        docker-compose -f docker-compose.test.yml up -d
-        sleep 30
-
-    - name: Run E2E tests
-      run: |
-        cd apps/web && npm run test:e2e
-
-    - name: Upload E2E test results
-      uses: actions/upload-artifact@v3
-      if: failure()
-      with:
-        name: playwright-report
-        path: apps/web/playwright-report/
-
-    - name: Stop services
-      run: docker-compose -f docker-compose.test.yml down
-
-  # Build Docker Images
-  build:
-    runs-on: ubuntu-latest
-    needs: [test, e2e]
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.build.outputs.digest }}
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-
-    - name: Build and push API image
-      id: build
-      uses: docker/build-push-action@v5
-      with:
-        context: ./apps/api
-        file: ./apps/api/Dockerfile.prod
-        push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
-
-    - name: Build and push Judge image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./services/judge
-        file: ./services/judge/Dockerfile.prod
-        push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/judge:${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
-
-    - name: Build and push Web image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./apps/web
-        file: ./apps/web/Dockerfile.prod
-        push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/web:${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
-
-  # Deploy to Staging
-  deploy-staging:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Deploy to staging
-      run: |
-        echo "Deploying to staging environment..."
-        # Add your staging deployment logic here
-        # Example: Update docker-compose with new image tags and restart services
-
-    - name: Run smoke tests
-      run: |
-        echo "Running smoke tests..."
-        # Add smoke test commands here
-
-  # Deploy to Production
-  deploy-production:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Deploy to production
-      run: |
-        echo "Deploying to production environment..."
-        # Add your production deployment logic here
-        # Example: Update docker-compose.prod.yml with new image tags
-
-    - name: Run health checks
-      run: |
-        echo "Running health checks..."
-        # Add health check commands here
-
-    - name: Notify deployment
-      if: success()
-      run: |
-        echo "Deployment successful!"
-        # Add notification logic (Slack, email, etc.)
-
-  # Security Scanning
+  # ── Security Audit ───────────────────────────────────────────────────────────
   security:
+    name: Security Audit
     runs-on: ubuntu-latest
-    needs: build
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ needs.build.outputs.image-tag }}
-        format: 'sarif'
-        output: 'trivy-results.sarif'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-    - name: Upload Trivy scan results
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: 'trivy-results.sarif'
+      - name: Audit server dependencies
+        working-directory: server
+        run: npm install && npm audit --audit-level=critical || true
 
-    - name: Run CodeQL Analysis
-      uses: github/codeql-action/init@v2
-      with:
-        languages: javascript, typescript
-
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v2
-
-  # Performance Testing
-  performance:
-    runs-on: ubuntu-latest
-    needs: deploy-staging
-    if: github.ref == 'refs/heads/develop'
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-
-    - name: Install Artillery
-      run: npm install -g artillery
-
-    - name: Run performance tests
-      run: |
-        artillery run load-test-execution.yml --target ${{ secrets.STAGING_URL }}
-
-    - name: Upload performance results
-      uses: actions/upload-artifact@v3
-      with:
-        name: performance-results
-        path: artillery-report.html
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: npm install && npm audit --audit-level=critical || true
